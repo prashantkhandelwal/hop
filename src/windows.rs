@@ -1,9 +1,11 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::process::{Child, Command};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -12,6 +14,7 @@ use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
     CoUninitialize, IServiceProvider,
 };
+use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationGridPattern, TreeScope_Subtree, UIA_GridPatternId,
@@ -29,20 +32,22 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GA_ROOT, GA_ROOTOWNER, GUITHREADINFO, GetAncestor,
-    GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, HHOOK, IsChild,
-    IsWindow, IsWindowVisible, MSG, MSLLHOOKSTRUCT, PM_REMOVE, PeekMessageW, SetWindowsHookExW,
-    TranslateMessage, UnhookWindowsHookEx, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
-    WM_RBUTTONDOWN, WM_XBUTTONDOWN, WindowFromPoint,
+    GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetMessageW, GetWindowThreadProcessId,
+    IsChild, IsWindow, IsWindowVisible, MSG, MSLLHOOKSTRUCT, PM_REMOVE, PeekMessageW,
+    PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_MOUSE_LL,
+    WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN, WM_XBUTTONDOWN, WindowFromPoint,
 };
 use windows::core::Interface;
 
 thread_local! {
     static CLICK_TARGET: Cell<isize> = const { Cell::new(0) };
-    static OUTSIDE_CLICKED: Cell<bool> = const { Cell::new(false) };
+    static OUTSIDE_CLICKED: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
 }
 
 pub struct OutsideClickMonitor {
-    hook: HHOOK,
+    clicked: Arc<AtomicBool>,
+    thread_id: u32,
+    worker: Option<thread::JoinHandle<()>>,
 }
 
 impl OutsideClickMonitor {
@@ -53,27 +58,92 @@ impl OutsideClickMonitor {
         let raw_window_handle::RawWindowHandle::Win32(handle) = handle.as_raw() else {
             return Err("Outside-click dismissal requires a native Windows window.".into());
         };
-        if CLICK_TARGET.get() != 0 {
-            return Err("An outside-click monitor is already active on this thread.".into());
+        Self::start(handle.hwnd.get())
+    }
+
+    fn start(target: isize) -> Result<Self, String> {
+        let clicked = Arc::new(AtomicBool::new(false));
+        let worker_clicked = Arc::clone(&clicked);
+        let (ready, startup) = mpsc::sync_channel(1);
+        // WH_MOUSE_LL blocks global input until its installing thread dispatches the hook.
+        // Keep that thread independent of video rendering and all other GUI work.
+        let worker = thread::Builder::new()
+            .name("outside-clicks".into())
+            .spawn(move || {
+                let mut message = MSG::default();
+                let _ = unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) };
+                let hook = match unsafe {
+                    SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), None, 0)
+                } {
+                    Ok(hook) => hook,
+                    Err(error) => {
+                        let _ = ready.send(Err(format!("Cannot monitor outside clicks: {error}")));
+                        return;
+                    }
+                };
+                CLICK_TARGET.set(target);
+                OUTSIDE_CLICKED.with_borrow_mut(|state| *state = Some(worker_clicked));
+                if ready.send(Ok(unsafe { GetCurrentThreadId() })).is_ok() {
+                    loop {
+                        match unsafe { GetMessageW(&mut message, None, 0, 0) }.0 {
+                            -1 => {
+                                eprintln!(
+                                    "Hop: Outside-click message pump failed: {}",
+                                    windows::core::Error::from_thread()
+                                );
+                                break;
+                            }
+                            0 => break,
+                            _ => unsafe {
+                                let _ = TranslateMessage(&message);
+                                DispatchMessageW(&message);
+                            },
+                        }
+                    }
+                }
+                CLICK_TARGET.set(0);
+                OUTSIDE_CLICKED.with_borrow_mut(|state| *state = None);
+                if let Err(error) = unsafe { UnhookWindowsHookEx(hook) } {
+                    eprintln!("Hop: Cannot remove outside-click monitor: {error}");
+                }
+            })
+            .map_err(|error| format!("Cannot start outside-click worker: {error}"))?;
+        match startup.recv() {
+            Ok(Ok(thread_id)) => Ok(Self {
+                clicked,
+                thread_id,
+                worker: Some(worker),
+            }),
+            result => {
+                if worker.join().is_err() {
+                    return Err("Outside-click worker panicked during startup.".into());
+                }
+                Err(match result {
+                    Ok(Err(error)) => error,
+                    Err(error) => format!("Outside-click worker stopped during startup: {error}"),
+                    Ok(Ok(_)) => unreachable!(),
+                })
+            }
         }
-        let hook = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), None, 0) }
-            .map_err(|error| format!("Cannot monitor outside clicks: {error}"))?;
-        CLICK_TARGET.set(handle.hwnd.get());
-        OUTSIDE_CLICKED.set(false);
-        Ok(Self { hook })
     }
 
     pub fn take_close_request(&self) -> bool {
-        OUTSIDE_CLICKED.replace(false)
+        self.clicked.swap(false, Ordering::Relaxed)
     }
 }
 
 impl Drop for OutsideClickMonitor {
     fn drop(&mut self) {
-        CLICK_TARGET.set(0);
-        OUTSIDE_CLICKED.set(false);
-        if let Err(error) = unsafe { UnhookWindowsHookEx(self.hook) } {
-            eprintln!("Hop: Cannot remove outside-click monitor: {error}");
+        if let Err(error) =
+            unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) }
+        {
+            eprintln!("Hop: Cannot stop outside-click worker: {error}");
+            return;
+        }
+        if let Some(worker) = self.worker.take()
+            && worker.join().is_err()
+        {
+            eprintln!("Hop: Outside-click worker panicked.");
         }
     }
 }
@@ -101,7 +171,11 @@ unsafe extern "system" fn mouse_hook(code: i32, message: WPARAM, data: LPARAM) -
                 .iter()
                 .any(|window| window.0 as isize == target)
             {
-                OUTSIDE_CLICKED.set(true);
+                OUTSIDE_CLICKED.with_borrow(|state| {
+                    if let Some(clicked) = state {
+                        clicked.store(true, Ordering::Relaxed);
+                    }
+                });
             }
         }
     }
@@ -1569,6 +1643,38 @@ mod tests {
         assert_eq!(ExplorerConnection::grid_neighbor(5, 3, Right, 2), 4);
         assert_eq!(ExplorerConnection::grid_neighbor(5, 4, Right, 2), 4);
         assert_eq!(ExplorerConnection::grid_neighbor(1, 0, Down, 15), 0);
+    }
+
+    #[test]
+    fn outside_click_monitor_runs_and_stops_independently_of_the_caller() {
+        let mut monitor = OutsideClickMonitor::start(1).unwrap();
+        let worker = monitor.worker.take().unwrap();
+        assert_ne!(monitor.thread_id, unsafe { GetCurrentThreadId() });
+        assert_eq!(CLICK_TARGET.get(), 0);
+        assert!(OUTSIDE_CLICKED.with_borrow(|state| state.is_none()));
+        assert!(!worker.is_finished());
+
+        assert!(!monitor.take_close_request());
+        let clicked = Arc::clone(&monitor.clicked);
+        thread::spawn(move || clicked.store(true, Ordering::Relaxed))
+            .join()
+            .unwrap();
+        assert!(monitor.take_close_request());
+        assert!(!monitor.take_close_request());
+
+        drop(monitor);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn outside_click_monitors_have_independent_lifetimes() {
+        let first = OutsideClickMonitor::start(1).unwrap();
+        let second = OutsideClickMonitor::start(2).unwrap();
+        assert_ne!(first.thread_id, second.thread_id);
+        drop(first);
+        assert!(!second.worker.as_ref().unwrap().is_finished());
+        assert!(!second.take_close_request());
+        drop(second);
     }
 
     #[test]

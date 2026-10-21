@@ -111,6 +111,8 @@ reset them, then Save. Saving replaces the file atomically.
   them, so the destination application still receives its click. Merely moving
   the mouse, scrolling, or keeping keyboard focus in Explorer does not dismiss
   the preview.
+  The Windows mouse hook runs on a dedicated message-pump thread, so software
+  video rendering cannot hold up global mouse movement.
 
 ## Direct preview: Windows and Linux
 

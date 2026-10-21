@@ -159,7 +159,9 @@ Images are limited to 64 MiB on disk, dimensions of 16,384 pixels per axis, and 
 4,096 pixels per axis. GIFs are bounded to 500 frames, 128 MiB of retained
 frame data, and 2,048 pixels per axis; exceeding a limit shows an explicit
 error rather than silently dropping frames. GIF delays below 20 ms are clamped.
-Images are decoded on a worker thread. Unsupported files show only a centered
+Images are decoded and converted to texture-ready pixels on a worker thread,
+which wakes the UI as soon as a preview result is ready. Texture upload remains
+on the UI thread. Unsupported files show only a centered
 file-type icon and size (B, KiB, MiB, etc.), without an unsupported-format message
 or extra metadata. Windows uses the registered shell file-type icon; Linux and
 unavailable Windows associations use a generic document icon with an extension

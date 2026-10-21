@@ -28,9 +28,7 @@ pub fn show(path: PathBuf) -> Result<(), String> {
         Box::new(move |cc| {
             #[cfg(windows)]
             let outside_clicks = Some(crate::windows::OutsideClickMonitor::new(cc)?);
-            #[cfg(not(windows))]
-            let _ = cc;
-            let app = PreviewApp::new(path, settings);
+            let app = PreviewApp::new(path, settings, &cc.egui_ctx);
             #[cfg(windows)]
             let app = PreviewApp {
                 navigator,
@@ -242,9 +240,10 @@ fn take_navigation_keys(ctx: &egui::Context) -> Vec<egui::Key> {
 }
 
 impl PreviewApp {
-    fn new(path: PathBuf, settings: crate::settings::Settings) -> Self {
+    fn new(path: PathBuf, settings: crate::settings::Settings, ctx: &egui::Context) -> Self {
         let (sender, receiver) = mpsc::sync_channel(1);
         let (requests, pending) = mpsc::channel::<PathBuf>();
+        let ctx = ctx.clone();
         std::thread::spawn(move || {
             while let Ok(next) = pending.recv() {
                 // Serialize decoding and skip intermediate requests during rapid navigation.
@@ -253,6 +252,7 @@ impl PreviewApp {
                 if sender.send((path, result)).is_err() {
                     break;
                 }
+                ctx.request_repaint();
             }
         });
         let mut app = Self {
@@ -411,14 +411,12 @@ impl PreviewApp {
                         self.path.display()
                     );
                 }
-                if let Content::Image { rgba, size, .. } = &mut preview.content {
+                if let Content::Image { pixels, size } = &mut preview.content {
                     self.texture = Some(ctx.load_texture(
                         "file-preview",
-                        egui::ColorImage::from_rgba_unmultiplied(*size, rgba),
+                        egui::ColorImage::new(*size, std::mem::take(pixels)),
                         egui::TextureOptions::LINEAR,
                     ));
-                    rgba.clear();
-                    rgba.shrink_to_fit();
                 }
                 if let Content::Unsupported {
                     icon: Some(icon), ..
@@ -1640,7 +1638,7 @@ mod tests {
             app.path.clone(),
             Ok(Preview {
                 content: Content::Image {
-                    rgba: vec![255; 8],
+                    pixels: vec![egui::Color32::WHITE; 2],
                     size: [2, 1],
                 },
             }),
@@ -1830,11 +1828,76 @@ mod tests {
     }
 
     #[test]
+    fn worker_wakes_ui_after_publishing_ready_images_and_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let image_path = directory.path().join("ready.png");
+        let rgba = [10, 20, 30, 255, 100, 150, 200, 128, 255, 120, 60, 0];
+        image::RgbaImage::from_raw(3, 1, rgba.to_vec())
+            .unwrap()
+            .save(&image_path)
+            .unwrap();
+        let corrupt_path = directory.path().join("corrupt.png");
+        std::fs::write(&corrupt_path, "broken").unwrap();
+
+        for path in [
+            image_path.clone(),
+            corrupt_path,
+            directory.path().join("missing.png"),
+        ] {
+            let ctx = egui::Context::default();
+            for _ in 0..5 {
+                let _ = ctx.run(Default::default(), |_| {});
+            }
+            let (wake, repaint) = mpsc::channel();
+            ctx.set_request_repaint_callback(move |info| {
+                wake.send((std::thread::current().id(), info)).unwrap();
+            });
+            let mut app = PreviewApp::new(path.clone(), crate::settings::Settings::default(), &ctx);
+            let (worker, info) = repaint.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_ne!(worker, std::thread::current().id());
+            assert_eq!(info.delay, Duration::ZERO);
+            assert_eq!(info.viewport_id, egui::ViewportId::ROOT);
+            let (loaded_path, result) = app.receiver.try_recv().unwrap();
+            assert_eq!(loaded_path, path);
+            app.accept_result(loaded_path, result, &ctx);
+            let output = ctx.run(Default::default(), |_| {});
+            assert!(!app.loading);
+            if path == image_path {
+                assert!(app.error.is_none());
+                let texture = app.texture.as_ref().unwrap();
+                let delta = output
+                    .textures_delta
+                    .set
+                    .iter()
+                    .find(|(id, _)| *id == texture.id())
+                    .unwrap();
+                let egui::ImageData::Color(image) = &delta.1.image;
+                assert_eq!(image.size, [3, 1]);
+                assert_eq!(
+                    image.pixels,
+                    egui::ColorImage::from_rgba_unmultiplied([3, 1], &rgba).pixels
+                );
+                assert!(matches!(
+                    &app.preview.as_ref().unwrap().content,
+                    Content::Image { pixels, .. } if pixels.is_empty()
+                ));
+            } else {
+                assert!(app.error.is_some());
+                assert!(app.texture.is_none());
+            }
+        }
+    }
+
+    #[test]
     fn worker_loads_multiple_files_without_reopening_the_app() {
         let ctx = egui::Context::default();
         let executable = std::env::current_exe().unwrap();
         let folder = executable.parent().unwrap().to_owned();
-        let mut app = PreviewApp::new(executable.clone(), crate::settings::Settings::default());
+        let mut app = PreviewApp::new(
+            executable.clone(),
+            crate::settings::Settings::default(),
+            &ctx,
+        );
         let (path, result) = app.receiver.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_eq!(path, executable);
         assert!(result.is_ok());

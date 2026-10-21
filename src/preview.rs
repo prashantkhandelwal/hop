@@ -25,7 +25,7 @@ pub enum Content {
     Animation(Vec<AnimationFrame>),
     Video,
     Image {
-        rgba: Vec<u8>,
+        pixels: Vec<eframe::egui::Color32>,
         size: [usize; 2],
     },
     Text {
@@ -267,9 +267,11 @@ fn load_image(path: &Path) -> Result<Content, String> {
         decoded
     }
     .into_rgba8();
+    let size = [thumbnail.width() as usize, thumbnail.height() as usize];
+    let image = eframe::egui::ColorImage::from_rgba_unmultiplied(size, thumbnail.as_raw());
     Ok(Content::Image {
-        size: [thumbnail.width() as usize, thumbnail.height() as usize],
-        rgba: thumbnail.into_raw(),
+        size,
+        pixels: image.pixels,
     })
 }
 
@@ -458,13 +460,32 @@ mod tests {
         image::RgbaImage::from_pixel(3, 2, image::Rgba([10, 20, 30, 255]))
             .save(&path)
             .unwrap();
-        let Content::Image { size, rgba } = load(&path).unwrap().content else {
+        let Content::Image { size, pixels } = load(&path).unwrap().content else {
             panic!("Expected image");
         };
         assert_eq!(size, [3, 2]);
-        assert_eq!(rgba.len(), 24);
+        assert_eq!(pixels, vec![eframe::egui::Color32::from_rgb(10, 20, 30); 6]);
         fs::write(&path, "broken").unwrap();
         assert!(load(&path).is_err());
+    }
+
+    #[test]
+    fn still_images_are_texture_ready_with_transparency_preserved() {
+        let dir = TestDirectory::new();
+        let path = dir.0.join("transparent.png");
+        let rgba = [10, 20, 30, 255, 100, 150, 200, 128, 255, 120, 60, 0];
+        image::RgbaImage::from_raw(3, 1, rgba.to_vec())
+            .unwrap()
+            .save(&path)
+            .unwrap();
+        let Content::Image { size, pixels } = load(&path).unwrap().content else {
+            panic!("Expected image");
+        };
+        assert_eq!(size, [3, 1]);
+        assert_eq!(
+            pixels,
+            eframe::egui::ColorImage::from_rgba_unmultiplied(size, &rgba).pixels
+        );
     }
 
     #[test]
@@ -475,11 +496,15 @@ mod tests {
             image::RgbaImage::from_pixel(3, 2, image::Rgba([10, 20, 30, 255]))
                 .save(&path)
                 .unwrap();
-            let Content::Image { size, rgba } = load(&path).unwrap().content else {
+            let Content::Image { size, pixels } = load(&path).unwrap().content else {
                 panic!("Expected image for {extension}");
             };
             assert_eq!(size, [3, 2]);
-            assert_eq!(&rgba[..4], &[10, 20, 30, 255], "{extension}");
+            assert_eq!(
+                pixels,
+                vec![eframe::egui::Color32::from_rgb(10, 20, 30); 6],
+                "{extension}"
+            );
         }
     }
 

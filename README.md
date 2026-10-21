@@ -148,7 +148,8 @@ are intentionally outside this version's scope.
 | Folders | Up to 200 entries, sorted within the displayed subset |
 | Other files | Centered file-type icon and human-readable file size |
 
-The preview content uses the entire client area without a header, file details,
+The preview pane has a light grey background. The preview content uses the
+entire client area without a header, file details,
 dimensions, or keyboard hints. Images are centered and scaled to fit while
 preserving their aspect ratio. The native title bar and window controls remain.
 Loading errors and navigation failures are still displayed when needed;

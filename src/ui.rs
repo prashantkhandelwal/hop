@@ -763,8 +763,9 @@ impl eframe::App for PreviewApp {
 impl PreviewApp {
     fn show_content(&self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE)
+            .frame(egui::Frame::NONE.fill(egui::Color32::from_gray(240)))
             .show(ctx, |ui| {
+                *ui.visuals_mut() = egui::Visuals::light();
                 #[cfg(windows)]
                 if let Some(error) = &self.navigation_error {
                     ui.colored_label(ui.visuals().warn_fg_color, error);
@@ -1598,6 +1599,44 @@ mod tests {
         assert!(app.loading);
         app.accept_result(app.path.clone(), Ok(text_preview()), &ctx);
         assert!(matches!(app.preview.unwrap().content, Content::Text { .. }));
+    }
+
+    #[test]
+    fn preview_pane_is_light_grey_without_changing_the_global_theme() {
+        for visuals in [egui::Visuals::dark(), egui::Visuals::light()] {
+            let ctx = egui::Context::default();
+            ctx.set_visuals(visuals.clone());
+            let (mut app, _pending) = app_with_requests("text.txt");
+            app.preview = Some(text_preview());
+            let pane = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 640.0));
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(pane),
+                    ..Default::default()
+                },
+                |ctx| app.show_content(ctx),
+            );
+            assert!(output.shapes.iter().any(|shape| {
+                matches!(
+                    &shape.shape,
+                    egui::Shape::Rect(rect)
+                        if rect.rect == pane && rect.fill == egui::Color32::from_gray(240)
+                )
+            }));
+            let text = output
+                .shapes
+                .iter()
+                .find_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape {
+                        Some(text)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            assert_eq!(text.fallback_color, egui::Visuals::light().text_color());
+            assert_eq!(ctx.style().visuals.dark_mode, visuals.dark_mode);
+        }
     }
 
     #[test]

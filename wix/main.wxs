@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="Hop" Language="1033" Version="$(var.Version)"
+           Manufacturer="Prashant Khandelwal"
+           UpgradeCode="09956567-F1FB-46C0-A80B-527969C5C0EB">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser"
+             InstallPrivileges="limited" Description="Hop quick file previews"/>
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Hop is already installed."
+                  Schedule="afterInstallExecute"/>
+    <MediaTemplate EmbedCab="yes"/>
+    <Condition Message="Hop requires 64-bit Windows.">
+      Installed OR VersionNT64
+    </Condition>
+    <Icon Id="HopIcon" SourceFile="$(var.HopProjectDir)\assets\hop.ico"/>
+    <Property Id="ARPPRODUCTICON" Value="HopIcon"/>
+    <Property Id="ARPHELPLINK" Value="https://github.com/prashantkhandelwal/hop"/>
+
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER"/>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="ProgramsFolder" Name="Programs">
+          <Directory Id="INSTALLFOLDER" Name="Hop">
+            <Component Id="HopExecutable" Guid="68F36723-85E1-45B8-B7D8-345123775F03" Win64="yes">
+              <File Id="HopExe" Source="$(var.CargoTargetBinDir)\hop.exe"/>
+              <RegistryValue Root="HKCU" Key="Software\Hop\Installer" Name="Executable"
+                             Type="string" Value="[#HopExe]" KeyPath="yes"/>
+              <RemoveFolder Id="RemoveHopInstallFolder" Directory="INSTALLFOLDER" On="uninstall"/>
+              <RemoveFolder Id="RemoveProgramsFolder" Directory="ProgramsFolder" On="uninstall"/>
+              <Shortcut Id="HopShortcut" Directory="HopMenuFolder" Name="Hop" Target="[#HopExe]"
+                        Arguments="--watch" WorkingDirectory="INSTALLFOLDER" Icon="HopIcon"/>
+              <Shortcut Id="HopSettingsShortcut" Directory="HopMenuFolder" Name="Hop Settings"
+                        Target="[#HopExe]" Arguments="--settings" WorkingDirectory="INSTALLFOLDER"
+                        Icon="HopIcon"/>
+              <RemoveFolder Id="RemoveHopMenuFolder" Directory="HopMenuFolder" On="uninstall"/>
+            </Component>
+            <Component Id="HopLicense" Guid="1A56F1D3-27C9-48F5-A685-D683EBBA01FD" Win64="yes">
+              <File Id="HopLicenseFile" Source="$(var.HopProjectDir)\LICENSE"/>
+              <RegistryValue Root="HKCU" Key="Software\Hop\Installer" Name="License"
+                             Type="integer" Value="1" KeyPath="yes"/>
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="HopMenuFolder" Name="Hop"/>
+      </Directory>
+    </Directory>
+
+    <Feature Id="HopFeature" Title="Hop" Level="1">
+      <ComponentRef Id="HopExecutable"/>
+      <ComponentRef Id="HopLicense"/>
+      <ComponentGroupRef Id="MpvRuntime"/>
+    </Feature>
+    <UIRef Id="WixUI_InstallDir"/>
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.HopLicenseRtf)"/>
+  </Product>
+</Wix>

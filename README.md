@@ -31,9 +31,170 @@ branch or tag. It builds release binaries with stable Rust and the committed
 lockfile on Windows Server 2022 and Ubuntu 24.04 (both x86-64).
 Download `hop-windows-x86_64` or `hop-linux-x86_64` from the workflow run's
 Artifacts section. On Linux, run `chmod +x hop` after extracting the binary.
-Artifacts contain only Hop; video playback still requires the
+Binary artifacts contain only Hop; video playback still requires the
 [libmpv runtime](#video-runtime), and Linux requires the desktop/runtime
 libraries described above.
+
+### Windows installer (cargo-wix)
+
+The [MSI definition](wix/main.wxs) uses **cargo-wix 0.3.9** and **WiX Toolset
+3.14.1** (WiX 3, not the newer `wix` CLI). It defaults to installing for the
+current user into `%LOCALAPPDATA%\Programs\Hop`; the destination-folder screen
+lets the user choose another writable location without administrator privileges.
+It adds **Hop** and **Hop Settings** Start menu
+shortcuts, and includes the app icon, Hop's license, and your approved libmpv
+runtime bundle. It does not add Hop to PATH, enable startup, or launch it
+automatically. Startup remains opt-in through Settings.
+
+Install the MSVC build tools, Rust, and
+[WiX 3.14.1](https://github.com/wixtoolset/wix3/releases/tag/wix3141rtm), then:
+
+```powershell
+cargo install cargo-wix --version 0.3.9 --locked
+.\wix\build-installer.ps1 `
+  -RuntimeDirectory 'C:\approved-mpv-runtime' `
+  -WixBin 'C:\tools\wix314'
+```
+
+`WixBin` must contain `candle.exe`, `light.exe`, and `heat.exe`. If omitted, the
+script uses `%WIX%\bin` or finds `candle.exe` on PATH. Output is
+`target\wix\hop-<version>-x86_64.msi`. Exit any running Hop watcher before
+installing, upgrading, or uninstalling. Increase the package version in
+`Cargo.toml` for a new upgrade release; keep the MSI UpgradeCode and existing
+component GUIDs stable. Installers are unsigned unless you sign them separately.
+Validate installation, upgrading, playback, and removal in a clean Windows VM
+before distributing a release.
+
+**Approved runtime bundle:** provide a directory (or `.7z` archive for CI) with these
+nonempty files at its root, without an enclosing directory:
+
+```text
+libmpv-2.dll
+THIRD-PARTY-NOTICES.txt
+SOURCE.txt
+```
+
+Use an x86-64 libmpv client API 2 build. Include all additional DLLs it requires,
+all applicable license texts/notices, and the corresponding-source material
+required by that specific build. `THIRD-PARTY-NOTICES.txt` should identify the
+build and its licensing; `SOURCE.txt` should document how its corresponding
+source is provided. The entire directory, including subdirectories, is packaged.
+Do not include `hop.exe` or a root `LICENSE` file, which are reserved for Hop.
+The script checks architecture and required files, but cannot certify legal
+compliance: review the build's redistribution terms, source obligations, and
+runtime prerequisites before supplying it. No unreviewed runtime is downloaded
+automatically.
+
+#### Automated runtime preparation
+
+[wix/prepare-runtime.ps1](wix/prepare-runtime.ps1) automates runtime preparation
+using the checked-in [runtime manifest](wix/runtime-manifest.json). After a
+manifest has been completed and approved, CI downloads its pinned binary,
+license texts, source archives, and build materials; verifies every SHA-256;
+generates `THIRD-PARTY-NOTICES.txt` and `SOURCE.txt`; creates
+`hop-mpv-runtime.7z` and its checksum sidecar; and passes the prepared directory
+directly to cargo-wix. The prepared archive and manifest are also uploaded as
+the `hop-mpv-runtime` artifact.
+
+**The supplied manifest is intentionally unapproved and incomplete.** It pins
+the candidate zhongfly LGPL x64 binary, but does not invent its dependency
+inventory, licensing approval, or matching-source information. Until a reviewer
+completes that inventory, CI reports the pending review and skips MSI packaging.
+Normal Windows/Linux binary builds and offline runtime-preparation tests still
+run on every push.
+
+Complete these manifest fields for the exact binary being distributed:
+
+- `runtime`: name, HTTPS URL, SHA-256, extraction `root` (`"."` if no enclosing
+  directory), and an explicit `files` list containing `libmpv-2.dll` and all
+  additional runtime DLLs. Relative subdirectories are preserved.
+- `licenses`: one record per original license/notice file, with a unique plain
+  filename in `name`, an HTTPS `url`, and `sha256`. These files are downloaded
+  unchanged into `licenses\`.
+- `sources`: matching source archives and build-material records, each with
+  `name`, HTTPS `url`, `sha256`, and `purpose`. Include at least one `"source"`
+  record and one `"build"` record. Supply all applicable patches,
+  configurations, and build/reproduction instructions, not just a moving branch
+  URL. Files are included unchanged under `sources\`.
+- `components`: every reviewed dependency's `name`, exact `version` or commit,
+  `license` expression, and `licenses`/`sources` arrays referencing artifact
+  filenames above. Multiple components can reference a shared source/build
+  archive when it actually contains their matching materials. Every artifact
+  must be referenced.
+- `review`: set `reviewer`, an ISO `date` (`YYYY-MM-DD`), and `notes` explaining
+  the review. Set `approved` to `true` only after the inventory and
+  redistribution obligations have been reviewed.
+
+For example, each entry in `licenses` has this shape (replace the placeholders):
+
+```json
+{
+  "name": "mpv-COPYING.txt",
+  "url": "https://your-distribution.example/pinned-build/mpv-COPYING.txt",
+  "sha256": "<64-character SHA-256 of that exact file>"
+}
+```
+
+Source entries have the same shape plus `"purpose": "source"` or
+`"purpose": "build"`. A component references them by filename:
+
+```json
+{
+  "name": "mpv",
+  "version": "<exact revision>",
+  "license": "<reviewed license expression>",
+  "licenses": ["mpv-COPYING.txt"],
+  "sources": ["mpv-source.tar.xz", "runtime-build-materials.tar.xz"]
+}
+```
+
+Use durable download locations for all pinned files. The upstream candidate
+retains only 30 days of binary releases; mirror approved files with their
+original checksums before they disappear. Automated validation checks structure,
+references, hashes, and presence; it does not certify legal compliance or prove
+that a dependency inventory is complete.
+
+Local preparation requires PowerShell and 7-Zip:
+
+```powershell
+# Validate without downloading; an unapproved manifest reports Approved=False.
+.\wix\prepare-runtime.ps1 -ValidateOnly
+
+# Use a fresh output directory. An unapproved/incomplete manifest fails.
+$runtime = .\wix\prepare-runtime.ps1 -OutputDirectory '.\target\prepared-runtime'
+.\wix\build-installer.ps1 -RuntimeDirectory $runtime.RuntimeDirectory -WixBin 'C:\tools\wix314'
+
+# Offline fixture tests; no upstream downloads or actual licensing approval.
+.\wix\test-prepare-runtime.ps1
+```
+
+The script refuses an existing output directory to prevent stale materials
+from entering a later bundle. The binary archive's unused files are not
+implicitly distributed: list all necessary DLLs and original license/notice
+materials explicitly in the manifest.
+
+#### Using an externally prepared bundle instead
+
+The existing external-bundle mode remains available and takes precedence over
+the manifest. Set these **repository Actions variables** under GitHub
+**Settings → Secrets and variables → Actions → Variables**:
+
+- `HOP_MPV_BUNDLE_URL`: an HTTPS URL to the approved runtime `.7z` archive.
+- `HOP_MPV_BUNDLE_SHA256`: its 64-character SHA-256 digest.
+
+The workflow verifies the checksum before extracting with 7-Zip (preinstalled
+on the Windows runner) and uploads
+`hop-windows-x86_64-msi`. If the URL is unset, CI uses the reviewed-manifest
+mode described above; a missing/invalid external checksum fails packaging.
+For a local `.7z` archive, compute its digest with
+`Get-FileHash .\mpv-runtime.7z -Algorithm SHA256`.
+Changing the archive format does not waive the bundle requirements: an upstream
+libmpv archive must still include the required notices and source materials
+before it can be used by the installer.
+
+Uninstall through Windows Settings. User preview settings are preserved.
+If startup was enabled in Hop, disable it and Save before uninstalling; the
+installer deliberately leaves the current user's startup entry untouched.
 
 ## Windows Explorer: Space to preview
 

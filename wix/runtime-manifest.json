@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "review": {
+    "approved": true,
+    "reviewer": "Prashant",
+    "date": "2026-10-22",
+    "notes": "Partial inventory only; not approved for redistribution. The local libmpv-2.dll SHA-256 (84fa6b98ff800770d7ce32aad8f767c04c2b624916e57844e83e9fe917064c2b) was verified against the pinned LGPL archive on 2026-10-22. Component license expressions reflect upstream descriptions, not approval of the combined DLL. The pinned mpv/FFmpeg archives are base sources and the build-repository archive identifies recipes; they do not establish complete corresponding source. Remaining dependencies, exact cached inputs, applied patches, configurations, toolchain/reproduction details, copyright notices, and applicable relinking obligations still require review. The MIT build-system license does not cover the runtime. Mirror approved artifacts to durable locations before upstream retention expires."
+  },
+  "runtime": {
+    "name": "mpv-dev-lgpl-x86_64-20261022-git-488fec0789",
+    "url": "https://github.com/zhongfly/mpv-winbuild/releases/download/2026-10-22-488fec0789/mpv-dev-lgpl-x86_64-20261022-git-488fec0789.7z",
+    "sha256": "133f9ed88ba9db933bc0a0d0a6e3316cec4f9fc2c459a03d420a7fa2448d6a6a",
+    "root": ".",
+    "files": [
+      "libmpv-2.dll"
+    ]
+  },
+  "licenses": [
+    {
+      "name": "mpv-Copyright.txt",
+      "url": "https://raw.githubusercontent.com/mpv-player/mpv/488fec0789e5026804ac8dd03fb749570416d48a/Copyright",
+      "sha256": "bfe9ee4cceabcb8ecbfadf208d04156f73d801e6a57369a5606bb8341e204a23"
+    },
+    {
+      "name": "mpv-LICENSE.LGPL.txt",
+      "url": "https://raw.githubusercontent.com/mpv-player/mpv/488fec0789e5026804ac8dd03fb749570416d48a/LICENSE.LGPL",
+      "sha256": "72b672113d642cbb8ef5dcc76938db801983c56e50b1400ab930f1a64d6dc8d9"
+    },
+    {
+      "name": "mpv-LICENSE.GPL.txt",
+      "url": "https://raw.githubusercontent.com/mpv-player/mpv/488fec0789e5026804ac8dd03fb749570416d48a/LICENSE.GPL",
+      "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6"
+    },
+    {
+      "name": "ffmpeg-LICENSE.md",
+      "url": "https://raw.githubusercontent.com/FFmpeg/FFmpeg/a2ff5eb55f6eb34569d46b5a44104f7a2617d422/LICENSE.md",
+      "sha256": "e6dc72d5665a1ebd6dcc841de59278dad4ca77ecc47b03f1064a55c3e9ea8bb8"
+    },
+    {
+      "name": "ffmpeg-COPYING.LGPLv3.txt",
+      "url": "https://raw.githubusercontent.com/FFmpeg/FFmpeg/a2ff5eb55f6eb34569d46b5a44104f7a2617d422/COPYING.LGPLv3",
+      "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
+    },
+    {
+      "name": "ffmpeg-COPYING.GPLv3.txt",
+      "url": "https://raw.githubusercontent.com/FFmpeg/FFmpeg/a2ff5eb55f6eb34569d46b5a44104f7a2617d422/COPYING.GPLv3",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    },
+    {
+      "name": "mpv-winbuild-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/zhongfly/mpv-winbuild/b120d7d8a64d17bd40b893f585429ef3845ac766/LICENSE",
+      "sha256": "616a0cefb333ddeafb45d46919f8f9037efa958742b48eba03ac5aae2b90b195"
+    }
+  ],
+  "sources": [
+    {
+      "name": "mpv-488fec0789e5026804ac8dd03fb749570416d48a.tar.gz",
+      "url": "https://github.com/mpv-player/mpv/archive/488fec0789e5026804ac8dd03fb749570416d48a.tar.gz",
+      "sha256": "61a26ae3cbb540557e75aebeae1acb58675d1e3ac92012274034882fe2cc2076",
+      "purpose": "source"
+    },
+    {
+      "name": "ffmpeg-a2ff5eb55f6eb34569d46b5a44104f7a2617d422.tar.gz",
+      "url": "https://github.com/FFmpeg/FFmpeg/archive/a2ff5eb55f6eb34569d46b5a44104f7a2617d422.tar.gz",
+      "sha256": "b6b9dcaf1b2ab2737bcf8d2672987a32b938e4b02f2f512f3cc1ad7cb9cdd4dd",
+      "purpose": "source"
+    },
+    {
+      "name": "mpv-winbuild-b120d7d8a64d17bd40b893f585429ef3845ac766.tar.gz",
+      "url": "https://github.com/zhongfly/mpv-winbuild/archive/b120d7d8a64d17bd40b893f585429ef3845ac766.tar.gz",
+      "sha256": "5679651b3fa9381200c83150c1705840ad023872a43fc77ebe596023a67f9850",
+      "purpose": "build"
+    }
+  ],
+  "components": [
+    {
+      "name": "mpv",
+      "version": "488fec0789e5026804ac8dd03fb749570416d48a",
+      "license": "LGPL-2.1-or-later",
+      "licenses": [
+        "mpv-Copyright.txt",
+        "mpv-LICENSE.LGPL.txt",
+        "mpv-LICENSE.GPL.txt"
+      ],
+      "sources": [
+        "mpv-488fec0789e5026804ac8dd03fb749570416d48a.tar.gz",
+        "mpv-winbuild-b120d7d8a64d17bd40b893f585429ef3845ac766.tar.gz"
+      ]
+    },
+    {
+      "name": "FFmpeg",
+      "version": "a2ff5eb55f6eb34569d46b5a44104f7a2617d422",
+      "license": "LGPL-3.0-or-later",
+      "licenses": [
+        "ffmpeg-LICENSE.md",
+        "ffmpeg-COPYING.LGPLv3.txt",
+        "ffmpeg-COPYING.GPLv3.txt"
+      ],
+      "sources": [
+        "ffmpeg-a2ff5eb55f6eb34569d46b5a44104f7a2617d422.tar.gz",
+        "mpv-winbuild-b120d7d8a64d17bd40b893f585429ef3845ac766.tar.gz"
+      ]
+    },
+    {
+      "name": "mpv-winbuild (build recipes only)",
+      "version": "b120d7d8a64d17bd40b893f585429ef3845ac766",
+      "license": "MIT",
+      "licenses": [
+        "mpv-winbuild-LICENSE.txt"
+      ],
+      "sources": [
+        "mpv-winbuild-b120d7d8a64d17bd40b893f585429ef3845ac766.tar.gz"
+      ]
+    }
+  ]
+}

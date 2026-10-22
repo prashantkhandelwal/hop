@@ -45,3 +45,122 @@ jobs:
           name: hop-${{ matrix.platform }}
           path: ${{ matrix.binary }}
           if-no-files-found: error
+
+  runtime-configuration:
+    name: Validate runtime preparation
+    runs-on: windows-2022
+    outputs:
+      enabled: ${{ steps.configuration.outputs.enabled }}
+      mode: ${{ steps.configuration.outputs.mode }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Test runtime preparation offline
+        shell: pwsh
+        run: .\wix\test-prepare-runtime.ps1
+
+      - name: Check runtime configuration
+        id: configuration
+        shell: pwsh
+        env:
+          BUNDLE_URL: ${{ vars.HOP_MPV_BUNDLE_URL }}
+          BUNDLE_SHA256: ${{ vars.HOP_MPV_BUNDLE_SHA256 }}
+        run: |
+          if ($env:BUNDLE_URL) {
+            if (-not $env:BUNDLE_URL.StartsWith('https://') -or $env:BUNDLE_SHA256 -notmatch '^[0-9a-fA-F]{64}$') {
+              throw 'External runtime bundles require an HTTPS URL and a 64-character SHA-256.'
+            }
+            "enabled=true" >> $env:GITHUB_OUTPUT
+            "mode=external" >> $env:GITHUB_OUTPUT
+          } else {
+            $state = .\wix\prepare-runtime.ps1 -ValidateOnly
+            "enabled=$($state.Approved.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+            "mode=manifest" >> $env:GITHUB_OUTPUT
+            if (-not $state.Approved) {
+              Write-Output "::notice::$($state.Reason) MSI packaging is disabled; binary builds continue."
+            }
+          }
+
+  windows-installer:
+    name: Windows MSI with approved video runtime
+    needs: runtime-configuration
+    if: needs.runtime-configuration.outputs.enabled == 'true'
+    runs-on: windows-2022
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-wix
+        run: cargo install cargo-wix --version 0.3.9 --locked
+
+      - name: Install pinned WiX Toolset
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'wix314-binaries.zip'
+          Invoke-WebRequest 'https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip' -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne '6AC824E1642D6F7277D0ED7EA09411A508F6116BA6FAE0AA5F2C7DAA2FF43D31') {
+            throw 'WiX archive checksum mismatch.'
+          }
+          $tools = Join-Path $env:RUNNER_TEMP 'wix314'
+          Expand-Archive -LiteralPath $archive -DestinationPath $tools
+          "HOP_WIX_BIN=$tools" >> $env:GITHUB_ENV
+
+      - name: Download approved runtime bundle
+        if: needs.runtime-configuration.outputs.mode == 'external'
+        shell: pwsh
+        env:
+          BUNDLE_URL: ${{ vars.HOP_MPV_BUNDLE_URL }}
+          BUNDLE_SHA256: ${{ vars.HOP_MPV_BUNDLE_SHA256 }}
+        run: |
+          if ($env:BUNDLE_SHA256 -notmatch '^[0-9a-fA-F]{64}$') {
+            throw 'Set HOP_MPV_BUNDLE_SHA256 to the approved .7z archive SHA-256.'
+          }
+          if (-not $env:BUNDLE_URL.StartsWith('https://')) {
+            throw 'HOP_MPV_BUNDLE_URL must use HTTPS.'
+          }
+          $archive = Join-Path $env:RUNNER_TEMP 'mpv-runtime.7z'
+          Invoke-WebRequest $env:BUNDLE_URL -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $env:BUNDLE_SHA256) {
+            throw 'Runtime bundle checksum mismatch.'
+          }
+          $runtime = Join-Path $env:RUNNER_TEMP 'mpv-runtime'
+          $sevenZip = (Get-Command 7z.exe -ErrorAction Stop).Source
+          & $sevenZip x $archive "-o$runtime" -y
+          if ($LASTEXITCODE -ne 0) {
+            throw "Runtime bundle extraction failed with exit code $LASTEXITCODE."
+          }
+          "HOP_MPV_RUNTIME=$runtime" >> $env:GITHUB_ENV
+
+      - name: Prepare runtime from reviewed manifest
+        if: needs.runtime-configuration.outputs.mode == 'manifest'
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'hop-mpv-runtime'
+          $result = .\wix\prepare-runtime.ps1 -OutputDirectory $output
+          "HOP_MPV_RUNTIME=$($result.RuntimeDirectory)" >> $env:GITHUB_ENV
+
+      - name: Upload prepared runtime and provenance
+        if: needs.runtime-configuration.outputs.mode == 'manifest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hop-mpv-runtime
+          path: |
+            ${{ runner.temp }}/hop-mpv-runtime/hop-mpv-runtime.7z
+            ${{ runner.temp }}/hop-mpv-runtime/hop-mpv-runtime.7z.sha256
+            ${{ runner.temp }}/hop-mpv-runtime/runtime-manifest.json
+          if-no-files-found: error
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: .\wix\build-installer.ps1 -RuntimeDirectory $env:HOP_MPV_RUNTIME -WixBin $env:HOP_WIX_BIN
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: hop-windows-x86_64-msi
+          path: target/wix/*.msi
+          if-no-files-found: error

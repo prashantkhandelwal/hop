@@ -2,6 +2,10 @@
 name = "hop"
 version = "0.1.0"
 edition = "2024"
+authors = ["Prashant Khandelwal"]
+description = "Quick file previews for Windows and Linux"
+license = "MIT"
+repository = "https://github.com/prashantkhandelwal/hop"
 
 [dependencies]
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }

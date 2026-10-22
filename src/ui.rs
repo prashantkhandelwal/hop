@@ -19,7 +19,7 @@ pub fn show(path: PathBuf) -> Result<(), String> {
             .to_string_lossy()
     );
     let options = eframe::NativeOptions {
-        viewport: preview_viewport(activate),
+        viewport: preview_viewport(activate).with_icon(crate::app_icon::load()?),
         ..Default::default()
     };
     eframe::run_native(
@@ -59,6 +59,7 @@ pub fn show_settings() -> Result<(), String> {
         "Hop - Settings",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
+                .with_icon(crate::app_icon::load()?)
                 .with_inner_size([440.0, 240.0])
                 .with_min_inner_size([400.0, 240.0]),
             ..Default::default()
@@ -124,6 +125,7 @@ pub fn show_about() -> Result<(), String> {
         "Hop - About",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
+                .with_icon(crate::app_icon::load()?)
                 .with_inner_size([360.0, 200.0])
                 .with_resizable(false),
             ..Default::default()
@@ -778,7 +780,11 @@ impl PreviewApp {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
                 let Some(preview) = &self.preview else {
-                    ui.spinner();
+                    let rect = egui::Rect::from_center_size(
+                        ui.max_rect().center(),
+                        egui::Vec2::splat(ui.spacing().interact_size.y),
+                    );
+                    ui.put(rect, egui::Spinner::new());
                     return;
                 };
                 match &preview.content {
@@ -792,41 +798,176 @@ impl PreviewApp {
                         }
                     }
                     Content::Text { text, .. } => {
-                        egui::ScrollArea::both().id_salt(&self.path).show(ui, |ui| {
-                            ui.add(
-                                egui::Label::new(egui::RichText::new(text).monospace())
-                                    .wrap_mode(egui::TextWrapMode::Extend),
-                            );
+                        egui::Frame::NONE.inner_margin(16).show(ui, |ui| {
+                            ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                            egui::ScrollArea::both().id_salt(&self.path).show(ui, |ui| {
+                                ui.add(
+                                    egui::Label::new(egui::RichText::new(text).monospace())
+                                        .wrap_mode(egui::TextWrapMode::Extend),
+                                );
+                            });
                         });
                     }
                     Content::Directory { entries, .. } => {
-                        if entries.is_empty() {
-                            ui.label("Empty folder");
-                        }
-                        egui::ScrollArea::both().id_salt(&self.path).show(ui, |ui| {
-                            for entry in entries {
-                                ui.monospace(entry);
-                            }
-                        });
+                        show_directory(ui, &self.path, entries);
                     }
                     Content::Unsupported {
                         bytes, extension, ..
                     } => {
-                        show_file_info(ui, *bytes, extension, self.texture.as_ref());
+                        show_file_info(ui, &self.path, *bytes, extension, self.texture.as_ref());
                     }
                 }
             });
     }
 }
 
+fn show_directory(ui: &mut egui::Ui, path: &std::path::Path, entries: &[String]) {
+    let pane = ui.available_rect_before_wrap().shrink(16.0);
+    let name = icon_name(ui, path, 160.0_f32.min((pane.width() - 32.0) / 2.0));
+    let icon_column = egui::vec2(96.0_f32.max(name.size().x), 80.0 + 8.0 + name.size().y);
+    let left_width = icon_column.x + 32.0;
+    let text_style = if entries.is_empty() {
+        egui::TextStyle::Body
+    } else {
+        egui::TextStyle::Monospace
+    };
+    let font = text_style.resolve(ui.style());
+    let color = ui.visuals().text_color();
+    let labels: Vec<_> = ui.fonts_mut(|fonts| {
+        if entries.is_empty() {
+            vec![fonts.layout_no_wrap("Empty folder".into(), font, color)]
+        } else {
+            entries
+                .iter()
+                .map(|entry| fonts.layout_no_wrap(entry.clone(), font.clone(), color))
+                .collect()
+        }
+    });
+    let natural_size = egui::vec2(
+        labels
+            .iter()
+            .map(|label| label.size().x)
+            .fold(1.0, f32::max),
+        labels.iter().map(|label| label.size().y).sum::<f32>()
+            + ui.spacing().item_spacing.y * (labels.len() - 1) as f32,
+    );
+    let available = egui::vec2((pane.width() - left_width).max(1.0), pane.height().max(1.0));
+    let scrollbar_space = if natural_size.x > available.x || natural_size.y > available.y {
+        egui::Vec2::splat(ui.spacing().scroll.allocated_width())
+    } else {
+        egui::Vec2::ZERO
+    };
+    let contents_size = (natural_size + scrollbar_space).min(available);
+    let group = egui::Rect::from_center_size(
+        pane.center(),
+        egui::vec2(
+            left_width + contents_size.x,
+            contents_size.y.max(icon_column.y),
+        ),
+    );
+    let icon = egui::Rect::from_center_size(
+        egui::pos2(
+            group.left() + icon_column.x / 2.0,
+            group.center().y - icon_column.y / 2.0 + 40.0,
+        ),
+        egui::vec2(96.0, 80.0),
+    );
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(icon.min, egui::vec2(40.0, 28.0)),
+        5.0,
+        egui::Color32::from_rgb(218, 162, 40),
+    );
+    ui.painter().rect(
+        egui::Rect::from_min_max(icon.min + egui::vec2(0.0, 16.0), icon.max),
+        5.0,
+        egui::Color32::from_rgb(244, 190, 72),
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(190, 139, 31)),
+        egui::StrokeKind::Inside,
+    );
+    show_icon_name(
+        ui,
+        path,
+        name,
+        egui::pos2(icon.center().x, icon.bottom() + 8.0),
+    );
+    let contents = egui::Rect::from_center_size(
+        egui::pos2(group.right() - contents_size.x / 2.0, group.center().y),
+        contents_size,
+    );
+    ui.scope_builder(egui::UiBuilder::new().max_rect(contents), |ui| {
+        egui::ScrollArea::both()
+            .id_salt(path)
+            .auto_shrink([false, false])
+            .min_scrolled_width(0.0)
+            .min_scrolled_height(0.0)
+            .show(ui, |ui| {
+                for label in labels {
+                    ui.label(label);
+                }
+            });
+    });
+}
+
+fn icon_name(ui: &egui::Ui, path: &std::path::Path, width: f32) -> std::sync::Arc<egui::Galley> {
+    let name = path
+        .file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy();
+    let mut job = egui::text::LayoutJob::simple(
+        name.into_owned(),
+        egui::FontId::proportional(14.0),
+        ui.visuals().text_color(),
+        width.max(1.0),
+    );
+    job.wrap.max_rows = 3;
+    job.halign = egui::Align::Center;
+    ui.fonts_mut(|fonts| fonts.layout_job(job))
+}
+
+fn show_icon_name(
+    ui: &mut egui::Ui,
+    path: &std::path::Path,
+    name: std::sync::Arc<egui::Galley>,
+    center_top: egui::Pos2,
+) {
+    let rect = egui::Rect::from_min_size(
+        center_top - egui::vec2(name.size().x / 2.0, 0.0),
+        name.size(),
+    );
+    let position = rect.min - name.rect.min.to_vec2();
+    ui.painter()
+        .galley(position, name, ui.visuals().text_color());
+    ui.interact(
+        rect,
+        ui.id().with(("icon-name", path)),
+        egui::Sense::hover(),
+    )
+    .on_hover_text(
+        path.file_name()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy(),
+    );
+}
+
 fn show_file_info(
     ui: &mut egui::Ui,
+    path: &std::path::Path,
     bytes: u64,
     extension: &str,
     icon: Option<&egui::TextureHandle>,
 ) {
-    let center = ui.available_rect_before_wrap().center();
-    let rect = egui::Rect::from_center_size(center - egui::vec2(0.0, 18.0), egui::vec2(96.0, 96.0));
+    let pane = ui.available_rect_before_wrap().shrink(16.0);
+    let name = icon_name(ui, path, pane.width().min(320.0));
+    let size = ui.painter().layout_no_wrap(
+        file_size(bytes),
+        egui::FontId::proportional(16.0),
+        ui.visuals().text_color(),
+    );
+    let height = 96.0 + 8.0 + name.size().y + 8.0 + size.size().y;
+    let rect = egui::Rect::from_center_size(
+        egui::pos2(pane.center().x, pane.center().y - height / 2.0 + 48.0),
+        egui::vec2(96.0, 96.0),
+    );
     if let Some(icon) = icon {
         egui::Image::new(icon).paint_at(ui, rect);
     } else {
@@ -847,11 +988,16 @@ fn show_file_info(
             ui.visuals().text_color(),
         );
     }
-    ui.painter().text(
-        egui::pos2(center.x, rect.bottom() + 16.0),
-        egui::Align2::CENTER_TOP,
-        file_size(bytes),
-        egui::FontId::proportional(16.0),
+    let name_bottom = rect.bottom() + 8.0 + name.size().y;
+    show_icon_name(
+        ui,
+        path,
+        name,
+        egui::pos2(rect.center().x, rect.bottom() + 8.0),
+    );
+    ui.painter().galley(
+        egui::pos2(rect.center().x - size.size().x / 2.0, name_bottom + 8.0),
+        size,
         ui.visuals().text_color(),
     );
 }
@@ -887,7 +1033,192 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_preview_only_displays_icon_and_size() {
+    fn folders_show_an_icon_to_the_left_of_scrollable_contents() {
+        for size in [egui::vec2(400.0, 280.0), egui::vec2(900.0, 640.0)] {
+            for entries in [
+                Vec::new(),
+                vec!["x".into()],
+                vec!["child-folder\\".into(), "example.txt".into()],
+                (0..10)
+                    .map(|index| format!("file-{index:02}.txt"))
+                    .collect(),
+                (0..200).map(|index| format!("{index:03}")).collect(),
+                (0..200)
+                    .map(|index| format!("{index:03}-{}.txt", "long-name".repeat(30)))
+                    .collect(),
+            ] {
+                let ctx = egui::Context::default();
+                let (mut app, _pending) = app_with_requests("folder");
+                let list_fits_vertically = entries.len() <= 10;
+                let expected = if entries.is_empty() {
+                    "Empty folder".to_owned()
+                } else {
+                    entries[0].clone()
+                };
+                app.preview = Some(Preview {
+                    content: Content::Directory {
+                        entries,
+                        truncated: false,
+                    },
+                });
+                let pane = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(pane),
+                        ..Default::default()
+                    },
+                    |ctx| app.show_content(ctx),
+                );
+                let folder = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.fill == egui::Color32::from_rgb(244, 190, 72) =>
+                        {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .expect("Expected folder icon");
+                assert!(pane.contains_rect(folder));
+                let caption = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| {
+                        if let egui::Shape::Text(text) = &shape.shape
+                            && text.galley.text() == "folder"
+                        {
+                            Some(text.galley.rect.translate(text.pos.to_vec2()))
+                        } else {
+                            None
+                        }
+                    })
+                    .expect("Expected folder name");
+                assert!(caption.top() > folder.bottom());
+                assert!((caption.center().x - folder.center().x).abs() < 1.0);
+                let (text, clip) = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == expected => {
+                            Some((text, shape.clip_rect))
+                        }
+                        _ => None,
+                    })
+                    .expect("Expected folder contents");
+                assert!(text.pos.x > folder.right());
+                assert!(clip.left() > folder.right());
+                assert!(clip.right() <= pane.right());
+                assert!(clip.bottom() <= pane.bottom());
+                let icon = egui::Rect::from_min_max(folder.min - egui::vec2(0.0, 16.0), folder.max);
+                let group = icon.union(caption).union(egui::Rect::from_min_size(
+                    text.pos,
+                    egui::vec2(
+                        text.galley.size().x.min(size.x - 160.0),
+                        text.galley.size().y,
+                    ),
+                ));
+                assert!((group.center().x - pane.center().x).abs() < 1.0);
+                if list_fits_vertically {
+                    let list_bottom = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| {
+                            if let egui::Shape::Text(text) = &shape.shape
+                                && text.galley.text() != "folder"
+                            {
+                                Some(text.pos.y + text.galley.size().y)
+                            } else {
+                                None
+                            }
+                        })
+                        .fold(0.0, f32::max);
+                    assert!(((text.pos.y + list_bottom) / 2.0 - pane.center().y).abs() < 1.0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn icon_captions_wrap_long_names_and_preserve_unicode() {
+        for name in [
+            format!("{}.pdf", "Long file or folder name ".repeat(8)),
+            "R\u{e9}sum\u{e9} \u{6587}\u{4ef6}.pdf".to_owned(),
+        ] {
+            for directory in [false, true] {
+                let ctx = egui::Context::default();
+                let path = PathBuf::from("parent").join(&name);
+                let (mut app, _pending) = app_with_requests("unused");
+                app.path = path;
+                app.preview = Some(Preview {
+                    content: if directory {
+                        Content::Directory {
+                            entries: Vec::new(),
+                            truncated: false,
+                        }
+                    } else {
+                        Content::Unsupported {
+                            bytes: 1536,
+                            extension: "PDF".into(),
+                            icon: None,
+                        }
+                    },
+                });
+                let pane = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 280.0));
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(pane),
+                        ..Default::default()
+                    },
+                    |ctx| app.show_content(ctx),
+                );
+                let caption = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == name => Some(text),
+                        _ => None,
+                    })
+                    .expect("Expected full name in caption layout");
+                assert!(caption.galley.rows.len() <= 3);
+                let bounds = caption.galley.rect.translate(caption.pos.to_vec2());
+                assert!(pane.contains_rect(bounds));
+                if directory {
+                    let folder = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Rect(rect)
+                                if rect.fill == egui::Color32::from_rgb(244, 190, 72) =>
+                            {
+                                Some(rect.rect)
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert!(bounds.top() > folder.bottom());
+                    assert!((bounds.center().x - folder.center().x).abs() < 1.0);
+                } else {
+                    assert!((bounds.center().x - pane.center().x).abs() < 1.0);
+                    let size = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == "1.5 KiB" => {
+                                Some(text.pos.y)
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert!(size > bounds.bottom());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_preview_displays_icon_name_and_size() {
         let ctx = egui::Context::default();
         let (mut app, _pending) = app_with_requests("hidden-path.pdf");
         app.accept_result(
@@ -920,7 +1251,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(text, ["1.5 KiB"]);
+        assert_eq!(text, ["hidden-path.pdf", "1.5 KiB"]);
         let texture_id = app.texture.as_ref().unwrap().id();
         let icon = output.shapes.iter().find(|shape| {
             matches!(&shape.shape, egui::Shape::Rect(rect) if rect.brush.as_ref().is_some_and(|brush| brush.fill_texture_id == texture_id))
@@ -933,7 +1264,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_icon_has_extension_badge_and_size_without_error_text() {
+    fn generic_icon_has_extension_badge_name_and_size_without_error_text() {
         let ctx = egui::Context::default();
         let (mut app, _pending) = app_with_requests("unknown.archive");
         app.preview = Some(Preview {
@@ -952,7 +1283,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(text, ["ARCHIVE", "0 B"]);
+        assert_eq!(text, ["ARCHIVE", "unknown.archive", "0 B"]);
     }
 
     #[test]
@@ -1602,6 +1933,41 @@ mod tests {
     }
 
     #[test]
+    fn loading_spinner_stays_centered_when_the_preview_is_resized() {
+        let ctx = egui::Context::default();
+        let (mut app, _pending) = app_with_requests("loading.png");
+        app.loading = true;
+        for size in [egui::vec2(900.0, 640.0), egui::vec2(400.0, 280.0)] {
+            let pane = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(pane),
+                    time: Some(1.0),
+                    ..Default::default()
+                },
+                |ctx| app.show_content(ctx),
+            );
+            let spinner = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Path(path) => Some(path),
+                    _ => None,
+                })
+                .expect("Expected animated loading spinner");
+            let radius = ctx.style().spacing.interact_size.y / 2.0 - 2.0;
+            assert!(!spinner.points.is_empty());
+            for point in &spinner.points {
+                assert!((point.distance(pane.center()) - radius).abs() < 0.01);
+            }
+            assert_eq!(
+                output.viewport_output[&egui::ViewportId::ROOT].repaint_delay,
+                Duration::ZERO
+            );
+        }
+    }
+
+    #[test]
     fn preview_pane_is_light_grey_without_changing_the_global_theme() {
         for visuals in [egui::Visuals::dark(), egui::Visuals::light()] {
             let ctx = egui::Context::default();
@@ -1636,6 +2002,51 @@ mod tests {
                 .unwrap();
             assert_eq!(text.fallback_color, egui::Visuals::light().text_color());
             assert_eq!(ctx.style().visuals.dark_mode, visuals.dark_mode);
+        }
+    }
+
+    #[test]
+    fn text_previews_keep_padding_on_all_sides_for_short_and_scrollable_content() {
+        for size in [egui::vec2(400.0, 280.0), egui::vec2(900.0, 640.0)] {
+            for text in [
+                "hello".to_owned(),
+                format!("{}\n", "source ".repeat(100)).repeat(100),
+            ] {
+                let ctx = egui::Context::default();
+                let (mut app, _pending) = app_with_requests("source.txt");
+                app.preview = Some(Preview {
+                    content: Content::Text {
+                        text,
+                        truncated: false,
+                    },
+                });
+                let pane = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                let padded = pane.shrink(16.0);
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(pane),
+                        ..Default::default()
+                    },
+                    |ctx| app.show_content(ctx),
+                );
+                let (text, clip) = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| {
+                        if let egui::Shape::Text(text) = &shape.shape {
+                            Some((text, shape.clip_rect))
+                        } else {
+                            None
+                        }
+                    })
+                    .expect("Expected text preview");
+                assert_eq!(text.pos, padded.min);
+                assert!(padded.contains_rect(clip));
+                if text.galley.text() != "hello" {
+                    assert!(text.galley.size().x > padded.width());
+                    assert!(text.galley.size().y > padded.height());
+                }
+            }
         }
     }
 

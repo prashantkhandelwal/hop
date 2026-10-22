@@ -1,5 +1,7 @@
 # Hop
 
+<img src="assets/hop.svg" alt="Hop preview window and spacebar logo" width="96" height="96">
+
 A Rust quick-preview app for Windows and Linux. Preview images, UTF-8 text/source
 files, folders, and file metadata without opening the file's normal application.
 
@@ -29,7 +31,7 @@ cargo run --release -- --watch
 ```
 
 Running Hop without arguments on Windows also starts the watcher and adds an
-**H** icon to the Windows notification area (possibly in the hidden-icons
+**Hop preview-window/spacebar** icon to the Windows notification area (possibly in the hidden-icons
 overflow). Leave it running, select a file in an Explorer file-list pane,
 and press **Space**.
 The preview stays **always on top** and opens **without taking focus from Explorer**.
@@ -83,8 +85,12 @@ reset them, then Save. Saving replaces the file atomically.
   not search/address/rename fields or other applications.
 - Closing or hiding the source Explorer tab stops navigation and shows a
   notification in the preview; the last preview remains open.
+- Entering a folder or navigating back within the same Explorer tab keeps the
+  preview connected to that tab and follows its new selection. Hop allows a
+  one-second transition while Explorer makes its replacement view visible;
+  a view that remains hidden stops navigation.
 - If Explorer rebuilds its folder view, Hop reconnects to the same visible
-  source view instead of permanently disabling navigation. Persistent failures
+  source tab instead of permanently disabling navigation. Persistent failures
   remain visible and are retried with a short delay; warnings clear on recovery.
   Pending arrow presses are discarded after a failure to avoid unexpected
   movement later. Hop never reconnects to another tab or retries a selection
@@ -145,13 +151,15 @@ are intentionally outside this version's scope.
 | Animated GIF | Native Rust animation with frame timing and looping |
 | Video with audio | In-pane autoplay and looping using libmpv; MP4, MKV, WebM, MOV, AVI, WMV, MPEG, M4V, TS/MTS/M2TS, OGV, FLV, 3GP |
 | Text/source | UTF-8 text, up to 256 KiB, selectable read-only content |
-| Folders | Up to 200 entries, sorted within the displayed subset |
-| Other files | Centered file-type icon and human-readable file size |
+| Folders | Centered side-by-side group with a folder icon and name on the left and scrollable contents on the right; up to 200 entries sorted within the displayed subset |
+| Other files | Centered file-type icon with the file name underneath, followed by the human-readable file size |
 
 The preview pane has a light grey background. The preview content uses the
 entire client area without a header, file details,
 dimensions, or keyboard hints. Images are centered and scaled to fit while
 preserving their aspect ratio. The native title bar and window controls remain.
+Text/source previews have 16-point padding on all sides, including while scrolling.
+While content loads, an animated loading spinner appears in the center of the pane.
 Loading errors and navigation failures are still displayed when needed;
 truncation notices are written to the terminal rather than occupying the pane.
 
@@ -163,9 +171,11 @@ error rather than silently dropping frames. GIF delays below 20 ms are clamped.
 Images are decoded and converted to texture-ready pixels on a worker thread,
 which wakes the UI as soon as a preview result is ready. Texture upload remains
 on the UI thread. Unsupported files show only a centered
-file-type icon and size (B, KiB, MiB, etc.), without an unsupported-format message
-or extra metadata. Windows uses the registered shell file-type icon; Linux and
-unavailable Windows associations use a generic document icon with an extension
+file-type icon, file name, and size (B, KiB, MiB, etc.), without an unsupported-format
+message or extra metadata. Names below folder and file-type icons wrap to at most
+three lines; hover over the name to see it in full. Windows uses the registered
+shell file-type icon; Linux and unavailable Windows associations use a generic
+document icon with an extension
 badge. Icon lookup failures are logged to the terminal.
 
 PDFs, office documents, archives, executables, standalone audio, and other known
@@ -238,6 +248,14 @@ an otherwise supported image are shown explicitly rather than hidden.
 
 ## Development
 
+The application logo combines a preview window, an H monogram, and a spacebar
+key. It is embedded in the Windows executable and tray and used by the preview,
+Settings, and About windows. No separate icon files are needed beside Hop.
+The editable source is [assets/hop.svg](assets/hop.svg); [assets/hop.png](assets/hop.png)
+is its transparent 512-pixel export. After updating the SVG, export it to that PNG
+at 512 x 512, then run `.\assets\generate-ico.ps1` on Windows to regenerate the
+multi-resolution [assets/hop.ico](assets/hop.ico) before building.
+
 ```text
 cargo fmt --check
 cargo test
@@ -267,3 +285,12 @@ These check changing decoded frames, active audio output, play/pause, seeking,
 volume, releasing/reopening the player, and stopping playback on navigation.
 Normal `cargo test` skips
 these environment-dependent tests.
+
+On an interactive Windows desktop, this separate Explorer regression test
+opens its own temporary folder window, checks same-tab folder transitions,
+selection tracking, stale-navigation cleanup, and hidden-view handling, then
+closes that window:
+
+```text
+cargo test entering_folder_tracks_the_same_tab_and_releases_stale_navigation -- --ignored
+```

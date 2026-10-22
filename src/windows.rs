@@ -27,8 +27,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::{
     FVM_CONTENT, FVM_DETAILS, FVM_LIST, IFolderView, IShellBrowser, IShellFolderViewDual,
     IShellView, IShellWindows, IWebBrowserApp, SID_STopLevelBrowser, SVGIO_ALLVIEW,
-    SVSI_DESELECTOTHERS, SVSI_ENSUREVISIBLE, SVSI_FOCUSED, SVSI_NOTAKEFOCUS, SVSI_SELECT,
-    ShellWindows,
+    SVGIO_BACKGROUND, SVSI_DESELECTOTHERS, SVSI_ENSUREVISIBLE, SVSI_FOCUSED, SVSI_NOTAKEFOCUS,
+    SVSI_SELECT, ShellWindows,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GA_ROOT, GA_ROOTOWNER, GUITHREADINFO, GetAncestor,
@@ -231,7 +231,7 @@ fn selected_view(
     shell: &IShellWindows,
     foreground: HWND,
     focus: HWND,
-) -> windows::core::Result<Option<(IShellFolderViewDual, IFolderView)>> {
+) -> windows::core::Result<Option<(IShellFolderViewDual, IFolderView, IShellBrowser)>> {
     unsafe {
         for index in 0..shell.Count()? {
             let browser: IWebBrowserApp = shell.Item(&VARIANT::from(index))?.cast()?;
@@ -246,7 +246,11 @@ fn selected_view(
             if focus != view_window && !IsChild(view_window, focus).as_bool() {
                 continue;
             }
-            return Ok(Some((browser.Document()?.cast()?, view.cast()?)));
+            return Ok(Some((
+                browser.Document()?.cast()?,
+                view.cast()?,
+                shell_browser,
+            )));
         }
     }
     Ok(None)
@@ -590,12 +594,15 @@ fn explorer_source() -> Result<Option<(HWND, HWND)>, String> {
 struct ExplorerConnection {
     document: IShellFolderViewDual,
     view: IFolderView,
+    source_browser: IShellBrowser,
     layout_worker: LayoutWorker,
     layout_request: Option<LayoutRequest>,
     next_request: u64,
     directions: VecDeque<Direction>,
     foreground: HWND,
     source_view: HWND,
+    source_stopped: bool,
+    source_unavailable_since: Option<Instant>,
     next_poll: Instant,
     retry_error: Option<(Instant, String)>,
     close_keys: CloseKeys,
@@ -618,7 +625,7 @@ impl ExplorerConnection {
         let apartment = ComApartment;
         let shell: IShellWindows = unsafe { CoCreateInstance(&ShellWindows, None, CLSCTX_ALL) }
             .map_err(|error| format!("Cannot connect to Explorer: {error}"))?;
-        let (document, view) = selected_view(&shell, foreground, focus)
+        let (document, view, source_browser) = selected_view(&shell, foreground, focus)
             .map_err(|error| format!("Cannot find Explorer view: {error}"))?
             .ok_or("The originating Explorer view is no longer available.")?;
         let source_view = unsafe { view.cast::<IShellView>().and_then(|view| view.GetWindow()) }
@@ -626,12 +633,15 @@ impl ExplorerConnection {
         Ok(Self {
             document,
             view,
+            source_browser,
             layout_worker: LayoutWorker::new()?,
             layout_request: None,
             next_request: 0,
             directions: VecDeque::new(),
             foreground,
             source_view,
+            source_stopped: false,
+            source_unavailable_since: None,
             next_poll: Instant::now(),
             retry_error: None,
             close_keys: CloseKeys::default(),
@@ -650,6 +660,9 @@ impl ExplorerConnection {
         {
             return Ok(false);
         }
+        if !self.refresh_source()? {
+            return Ok(false);
+        }
         let source = explorer_focus()
             .map_err(|error| format!("Cannot inspect Explorer keyboard focus: {error}"))?;
         Ok(source.is_some_and(|(foreground, focus)| {
@@ -660,11 +673,15 @@ impl ExplorerConnection {
     }
 
     fn validate_source(&self) -> Result<(), String> {
+        self.validate_view(self.source_view)
+    }
+
+    fn validate_view(&self, view: HWND) -> Result<(), String> {
         if unsafe {
             IsWindow(Some(self.foreground)).as_bool()
-                && IsWindow(Some(self.source_view)).as_bool()
-                && IsChild(self.foreground, self.source_view).as_bool()
-                && IsWindowVisible(self.source_view).as_bool()
+                && IsWindow(Some(view)).as_bool()
+                && IsChild(self.foreground, view).as_bool()
+                && IsWindowVisible(view).as_bool()
         } {
             Ok(())
         } else {
@@ -675,9 +692,87 @@ impl ExplorerConnection {
         }
     }
 
+    fn refresh_source(&mut self) -> Result<bool, String> {
+        // The browser belongs to the source tab; its shell-view HWND can change
+        // when entering a folder or navigating back, without closing that tab.
+        if !unsafe {
+            IsWindow(Some(self.foreground)).as_bool() && IsWindowVisible(self.foreground).as_bool()
+        } {
+            self.source_stopped = true;
+            return self.validate_source().map(|()| true);
+        }
+        let shell_view = match unsafe { self.source_browser.QueryActiveShellView() } {
+            Ok(view) => view,
+            Err(error) if Self::is_disconnected(error.code()) && self.validate_source().is_ok() => {
+                self.rebind()
+                    .and_then(|()| unsafe { self.source_browser.QueryActiveShellView() })
+                    .map_err(|error| {
+                        format!("Cannot reconnect to the originating Explorer tab: {error}")
+                    })?
+            }
+            Err(error) => {
+                if Self::is_disconnected(error.code()) && self.validate_source().is_err() {
+                    if self.source_is_changing() {
+                        return Ok(false);
+                    }
+                    self.source_stopped = true;
+                }
+                return Err(format!(
+                    "Cannot inspect the originating Explorer tab: {error}"
+                ));
+            }
+        };
+        let window = unsafe { shell_view.GetWindow() }
+            .map_err(|error| format!("Cannot inspect the originating Explorer view: {error}"))?;
+        if let Err(error) = self.validate_view(window) {
+            if self.source_is_changing() {
+                return Ok(false);
+            }
+            self.source_stopped = true;
+            return Err(error);
+        }
+        let view: IFolderView = shell_view
+            .cast()
+            .map_err(|error| format!("Cannot access the originating Explorer view: {error}"))?;
+        let identity = |view: &IFolderView| view.cast::<windows::core::IUnknown>();
+        let changed = window != self.source_view
+            || identity(&view)
+                .and_then(|current| identity(&self.view).map(|previous| current != previous))
+                .map_err(|error| {
+                    format!("Cannot identify the originating Explorer view: {error}")
+                })?;
+        if changed {
+            let document = unsafe {
+                shell_view.GetItemObject::<windows::Win32::System::Com::IDispatch>(SVGIO_BACKGROUND)
+            }
+            .and_then(|document| document.cast::<IShellFolderViewDual>())
+            .map_err(|error| format!("Cannot read the new Explorer folder: {error}"))?;
+            self.document = document;
+            self.view = view;
+            self.source_view = window;
+            self.directions.clear();
+            self.layout_request = None;
+            self.next_poll = Instant::now();
+        }
+        self.source_unavailable_since = None;
+        Ok(true)
+    }
+
+    fn source_is_changing(&mut self) -> bool {
+        self.directions.clear();
+        self.layout_request = None;
+        // A replacement view may be briefly hidden while Explorer initializes it.
+        self.source_unavailable_since
+            .get_or_insert_with(Instant::now)
+            .elapsed()
+            < Duration::from_secs(1)
+    }
+
     pub fn navigate(&mut self, direction: Direction) -> Result<(), String> {
         self.ready_to_retry()?;
-        self.validate_source()?;
+        if !self.refresh_source()? {
+            return Ok(());
+        }
         self.directions.push_back(direction);
         self.next_poll = Instant::now();
         Ok(())
@@ -817,15 +912,7 @@ impl ExplorerConnection {
         match operation(self) {
             Err(error) if Self::is_disconnected(error.code()) => {
                 drop(error);
-                let shell = unsafe { CoCreateInstance(&ShellWindows, None, CLSCTX_ALL) }?;
-                let (document, view) = selected_view(&shell, self.foreground, self.source_view)?
-                    .ok_or_else(|| windows::core::Error::new(
-                        windows::Win32::Foundation::E_FAIL,
-                        "The originating Explorer view is no longer available for reconnection.",
-                    ))?;
-                self.document = document;
-                self.view = view;
-                self.layout_request = None;
+                self.rebind()?;
                 let result = operation(self);
                 if result.is_ok() {
                     eprintln!("Hop: Reconnected to the originating Explorer folder view.");
@@ -834,6 +921,22 @@ impl ExplorerConnection {
             }
             result => result,
         }
+    }
+
+    fn rebind(&mut self) -> windows::core::Result<()> {
+        let shell = unsafe { CoCreateInstance(&ShellWindows, None, CLSCTX_ALL) }?;
+        let (document, view, source_browser) =
+            selected_view(&shell, self.foreground, self.source_view)?.ok_or_else(|| {
+                windows::core::Error::new(
+                    windows::Win32::Foundation::E_FAIL,
+                    "The originating Explorer view is no longer available for reconnection.",
+                )
+            })?;
+        self.document = document;
+        self.view = view;
+        self.source_browser = source_browser;
+        self.layout_request = None;
+        Ok(())
     }
 
     fn is_disconnected(code: windows::core::HRESULT) -> bool {
@@ -860,7 +963,12 @@ impl ExplorerConnection {
     }
 
     pub fn pause_after_error(&mut self, error: &str) -> bool {
-        if self.validate_source().is_err() {
+        if self.source_stopped
+            || !unsafe {
+                IsWindow(Some(self.foreground)).as_bool()
+                    && IsWindowVisible(self.foreground).as_bool()
+            }
+        {
             return false;
         }
         if self.retry_error.is_none() {
@@ -875,7 +983,15 @@ impl ExplorerConnection {
 
     fn poll(&mut self) -> Result<ConnectionPoll, String> {
         self.ready_to_retry()?;
-        self.validate_source()?;
+        if Instant::now() < self.next_poll
+            && self.directions.is_empty()
+            && self.validate_source().is_ok()
+        {
+            return Ok(ConnectionPoll::Pending);
+        }
+        if !self.refresh_source()? {
+            return Ok(ConnectionPoll::Pending);
+        }
         self.advance_navigation()
             .map_err(|error| format!("Cannot navigate Explorer: {error}"))?;
         if Instant::now() < self.next_poll {
@@ -928,7 +1044,7 @@ fn launch_preview(shell: &IShellWindows) -> Result<Option<Child>, String> {
     let Some((foreground, focus)) = explorer_focus().map_err(|error| error.to_string())? else {
         return Ok(None);
     };
-    let Some((document, _)) =
+    let Some((document, _, _)) =
         selected_view(shell, foreground, focus).map_err(|error| error.to_string())?
     else {
         return Ok(None);
@@ -1407,6 +1523,177 @@ mod tests {
         for code in [E_ACCESSDENIED, E_FAIL, E_INVALIDARG, S_FALSE, S_OK] {
             assert!(!ExplorerConnection::is_disconnected(code));
         }
+    }
+
+    #[test]
+    #[ignore = "requires an interactive Windows desktop; opens and closes its own temporary Explorer window"]
+    fn entering_folder_tracks_the_same_tab_and_releases_stale_navigation() {
+        use windows::Win32::UI::Shell::Folder2;
+        use windows::core::BSTR;
+
+        struct TestBrowser(IWebBrowserApp);
+        impl Drop for TestBrowser {
+            fn drop(&mut self) {
+                if let Err(error) = unsafe { self.0.Quit() } {
+                    eprintln!("Hop test: Cannot close test-owned Explorer window: {error}");
+                }
+            }
+        }
+
+        fn folder_path(browser: &IWebBrowserApp) -> windows::core::Result<PathBuf> {
+            unsafe {
+                let document: IShellFolderViewDual = browser.Document()?.cast()?;
+                let folder: Folder2 = document.Folder()?.cast()?;
+                Ok(PathBuf::from(OsString::from_wide(&folder.Self_()?.Path()?)))
+            }
+        }
+
+        fn pump() {
+            let mut message = MSG::default();
+            unsafe {
+                while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
+                    let _ = TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+            }
+            thread::sleep(Duration::from_millis(8));
+        }
+
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
+            .ok()
+            .unwrap();
+        let _apartment = ComApartment;
+        let directory = tempfile::tempdir().unwrap();
+        let child = directory.path().join("child");
+        std::fs::create_dir(&child).unwrap();
+        let file = child.join("inside.txt");
+        std::fs::write(&file, "inside the selected folder").unwrap();
+        let shell: IShellWindows =
+            unsafe { CoCreateInstance(&ShellWindows, None, CLSCTX_ALL) }.unwrap();
+        let mut explorer = Command::new("explorer.exe")
+            .arg(format!("/n,{}", directory.path().display()))
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let browser = loop {
+            pump();
+            let found = (0..unsafe { shell.Count() }.unwrap()).find_map(|index| {
+                let browser: IWebBrowserApp = unsafe { shell.Item(&VARIANT::from(index)) }
+                    .ok()?
+                    .cast()
+                    .ok()?;
+                (folder_path(&browser).ok().as_deref() == Some(directory.path())).then_some(browser)
+            });
+            if let Some(browser) = found {
+                break TestBrowser(browser);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Test-owned Explorer window did not open"
+            );
+        };
+        let provider: IServiceProvider = browser.0.cast().unwrap();
+        let source: IShellBrowser =
+            unsafe { provider.QueryService(&SID_STopLevelBrowser) }.unwrap();
+        let foreground = HWND(unsafe { browser.0.HWND() }.unwrap().0 as *mut std::ffi::c_void);
+        let view = loop {
+            pump();
+            let view = unsafe { source.QueryActiveShellView().unwrap().GetWindow() }.unwrap();
+            if unsafe { IsWindowVisible(foreground).as_bool() && IsWindowVisible(view).as_bool() } {
+                break view;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Test-owned Explorer window did not become visible"
+            );
+        };
+        let mut navigator = ExplorerConnection::connect(foreground, view).unwrap();
+        for (target, selected) in [
+            (child.as_path(), file.as_path()),
+            (directory.path(), child.as_path()),
+        ] {
+            let old_view = navigator.source_view;
+            let empty = VARIANT::default();
+            unsafe {
+                browser.0.Navigate(
+                    &BSTR::from(target.to_str().unwrap()),
+                    Some(&empty),
+                    Some(&empty),
+                    Some(&empty),
+                    Some(&empty),
+                )
+            }
+            .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                pump();
+                if folder_path(&browser.0).ok().as_deref() == Some(target) {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "Explorer did not enter test folder"
+                );
+            }
+            navigator.directions.push_back(Direction::Down);
+            navigator.layout_request = Some(LayoutRequest {
+                id: navigator.next_request,
+                window: old_view.0 as usize,
+                mode: 0,
+            });
+            while !navigator.refresh_source().unwrap() {
+                pump();
+                assert!(
+                    Instant::now() < deadline,
+                    "Explorer view did not become visible"
+                );
+            }
+            assert!(navigator.directions.is_empty());
+            assert!(navigator.layout_request.is_none());
+            assert_eq!(
+                navigator
+                    .source_browser
+                    .cast::<windows::core::IUnknown>()
+                    .unwrap(),
+                source.cast::<windows::core::IUnknown>().unwrap()
+            );
+            while unsafe { navigator.view.ItemCount(SVGIO_ALLVIEW) }.unwrap() == 0 {
+                pump();
+                assert!(
+                    Instant::now() < deadline,
+                    "Explorer folder contents did not load"
+                );
+            }
+            unsafe {
+                navigator.view.SelectItem(
+                    0,
+                    (SVSI_SELECT.0 | SVSI_DESELECTOTHERS.0 | SVSI_FOCUSED.0) as u32,
+                )
+            }
+            .unwrap();
+            navigator.next_poll = Instant::now();
+            assert_eq!(
+                navigator.poll().unwrap(),
+                ConnectionPoll::Selection(Some(selected.to_owned()))
+            );
+            navigator.navigate(Direction::Down).unwrap();
+            navigator.next_poll = Instant::now();
+            assert!(navigator.poll().is_ok());
+        }
+        let _ = unsafe {
+            windows::Win32::UI::WindowsAndMessaging::ShowWindow(
+                navigator.source_view,
+                windows::Win32::UI::WindowsAndMessaging::SW_HIDE,
+            )
+        };
+        assert!(!navigator.refresh_source().unwrap());
+        navigator.source_unavailable_since = Some(Instant::now() - Duration::from_secs(2));
+        let error = navigator.refresh_source().unwrap_err();
+        assert!(error.contains("closed or hidden"));
+        assert!(!navigator.pause_after_error(&error));
+        drop(navigator);
+        drop(browser);
+        let _ = explorer.try_wait().unwrap();
     }
 
     #[test]

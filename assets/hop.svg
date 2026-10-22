@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>Hop: quick previews with the spacebar</title>
+  <defs>
+    <linearGradient id="tile" x1="32" y1="16" x2="464" y2="496" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#244D76"/>
+      <stop offset="1" stop-color="#102139"/>
+    </linearGradient>
+    <linearGradient id="key" x1="256" y1="368" x2="256" y2="440" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C4FFF2"/>
+      <stop offset="1" stop-color="#5DDECA"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#tile)"/>
+  <rect x="94" y="96" width="324" height="248" rx="32" fill="#091729" opacity=".4"/>
+  <rect x="94" y="80" width="324" height="248" rx="32" fill="#142E4D" stroke="#DCEBFF" stroke-width="14"/>
+  <path d="M102 144H410" stroke="#6889A5" stroke-width="8"/>
+  <circle cx="138" cy="112" r="7" fill="#72EBD5"/>
+  <circle cx="164" cy="112" r="7" fill="#8FB2CD"/>
+  <circle cx="190" cy="112" r="7" fill="#8FB2CD"/>
+  <rect x="170" y="176" width="30" height="108" rx="9" fill="#F3F8FF"/>
+  <rect x="312" y="176" width="30" height="108" rx="9" fill="#F3F8FF"/>
+  <rect x="192" y="215" width="128" height="30" rx="8" fill="#72EBD5"/>
+  <rect x="100" y="380" width="312" height="72" rx="20" fill="#1B8F89"/>
+  <rect x="100" y="368" width="312" height="72" rx="20" fill="url(#key)"/>
+  <path d="M178 393V410H334V393" fill="none" stroke="#153A50" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

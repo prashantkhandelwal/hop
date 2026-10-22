@@ -42,6 +42,23 @@ impl Drop for Icon {
     }
 }
 
+fn load_icon(instance: HINSTANCE) -> Result<Icon, String> {
+    // winresource embeds the application icon as resource 1. Do not use
+    // LR_SHARED: the returned icon is owned and released by Icon.
+    unsafe {
+        LoadImageW(
+            Some(instance),
+            PCWSTR(std::ptr::without_provenance(1)),
+            IMAGE_ICON,
+            32,
+            32,
+            LR_DEFAULTCOLOR,
+        )
+    }
+    .map(|handle| Icon(HICON(handle.0)))
+    .map_err(|error| format!("Cannot load Hop tray icon: {error}"))
+}
+
 pub struct Tray {
     window: HWND,
     icon: Icon,
@@ -65,34 +82,7 @@ impl Tray {
         let instance: HINSTANCE = unsafe { GetModuleHandleW(None) }
             .map_err(|error| format!("Cannot locate Hop module: {error}"))?
             .into();
-        let mut pixels = [0u8; 32 * 32 * 4];
-        for (index, pixel) in pixels.chunks_exact_mut(4).enumerate() {
-            let (x, y) = (index % 32, index / 32);
-            let letter = (7..25).contains(&y)
-                && ((7..11).contains(&x)
-                    || (21..25).contains(&x)
-                    || ((14..18).contains(&y) && (7..25).contains(&x)));
-            pixel.copy_from_slice(if letter {
-                &[255, 255, 255, 255]
-            } else {
-                &[199, 109, 54, 255]
-            });
-        }
-        let mask = [0u8; 128];
-        let icon = Icon(
-            unsafe {
-                CreateIcon(
-                    Some(instance),
-                    32,
-                    32,
-                    1,
-                    32,
-                    mask.as_ptr(),
-                    pixels.as_ptr(),
-                )
-            }
-            .map_err(|error| format!("Cannot create Hop tray icon: {error}"))?,
-        );
+        let icon = load_icon(instance)?;
         let mut tray = Self {
             window: HWND::default(),
             icon,
@@ -357,6 +347,15 @@ pub fn show_error(error: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tray_icon_loads_from_the_embedded_application_resource() {
+        let instance = unsafe { GetModuleHandleW(None) }.unwrap().into();
+        let icon = load_icon(instance).unwrap();
+        assert!(!icon.0.is_invalid());
+        let copied = Icon(unsafe { CopyIcon(icon.0) }.unwrap());
+        assert!(!copied.0.is_invalid());
+    }
 
     #[test]
     fn tray_menu_commands_have_distinct_actions() {

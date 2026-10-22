@@ -51,16 +51,19 @@ The workflow publishes these release assets:
 - `hop-0.1.0-linux-x86_64.zip`
 - `hop-0.1.0-x86_64.msi`
 
-Each binary ZIP contains the executable, `LICENSE`, and `README.md` at its root.
-These are binary-only packages, not self-contained video-runtime bundles.
-Install the libmpv/runtime dependencies described above separately, or use the
-Windows MSI with its approved bundled runtime. The Linux ZIP preserves the
-executable permission; extract with a tool that preserves Unix permissions.
+The Windows ZIP is a portable package containing `hop.exe`, `libmpv-2.dll`,
+`LICENSE`, and `README.md` at its root, along with all additional DLLs, notices,
+licenses, and source materials from the same approved runtime used by the MSI.
+Extract the entire ZIP into a folder before running Hop; keep its bundled files
+together. The Linux ZIP contains the executable, `LICENSE`, and `README.md`;
+install its libmpv/system dependencies separately. It preserves the executable
+permission; extract with a tool that preserves Unix permissions.
 
 Publishing requires both platform builds and MSI packaging to succeed. If the
-approved runtime is not configured and the MSI job is skipped, the release job
-fails without publishing a release. A tag that does not match the Cargo package
-version is also rejected. Tags containing a hyphen, such as `v0.2.0-rc.1`, are
+approved runtime is not configured, both the MSI and portable Windows ZIP are
+skipped, and the release job fails without publishing a release. A tag that does
+not match the Cargo package version is also rejected. Tags containing a hyphen,
+such as `v0.2.0-rc.1`, are
 marked as prereleases and must match the corresponding Cargo version.
 Release notes are generated automatically. Ordinary branch pushes do not
 publish releases; raw binary and versioned ZIP artifacts remain available from
@@ -230,7 +233,16 @@ Changing the archive format does not waive the bundle requirements: an upstream
 libmpv archive must still include the required notices and source materials
 before it can be used by the installer.
 
-Uninstall through Windows Settings. User preview settings are preserved.
+Uninstall through Windows Settings. The MSI records the selected installation
+directory under `HKCU\Software\Hop\Installer` and restores it for maintenance and
+uninstall, including custom locations. Uninstall removes MSI-managed application
+and runtime files, shortcuts, installer registry values, and empty installed
+directories. Files added separately are not deleted, so a folder containing
+unmanaged files may remain; the installer never recursively wipes a user-selected
+directory. User preview settings are preserved.
+This path-tracking fix applies to installations made with the updated MSI;
+previously installed packages retain their cached uninstall behavior. Increase
+the package version for a new installer release.
 If startup was enabled in Hop, disable it and Save before uninstalling; the
 installer deliberately leaves the current user's startup entry untouched.
 

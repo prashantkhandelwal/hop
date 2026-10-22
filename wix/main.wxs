@@ -17,6 +17,11 @@
     <Property Id="ARPHELPLINK" Value="https://github.com/prashantkhandelwal/hop"/>
 
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER"/>
+    <Property Id="INSTALLFOLDER" Secure="yes">
+      <RegistrySearch Id="FindHopInstallDirectory" Root="HKCU"
+                      Key="Software\Hop\Installer" Name="InstallDirectory"
+                      Type="raw" Win64="yes"/>
+    </Property>
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch Hop"/>
     <CustomAction Id="LaunchHop" FileKey="HopExe" ExeCommand="--watch"
                   Execute="immediate" Return="asyncNoWait" Impersonate="yes"/>
@@ -44,6 +49,8 @@
               <File Id="HopExe" Source="$(var.CargoTargetBinDir)\hop.exe"/>
               <RegistryValue Root="HKCU" Key="Software\Hop\Installer" Name="Executable"
                              Type="string" Value="[#HopExe]" KeyPath="yes"/>
+              <RegistryValue Root="HKCU" Key="Software\Hop\Installer" Name="InstallDirectory"
+                             Type="string" Value="[INSTALLFOLDER]"/>
               <RemoveFolder Id="RemoveHopInstallFolder" Directory="INSTALLFOLDER" On="uninstall"/>
               <RemoveFolder Id="RemoveProgramsFolder" Directory="ProgramsFolder" On="uninstall"/>
               <Shortcut Id="HopShortcut" Directory="HopMenuFolder" Name="Hop" Target="[#HopExe]"

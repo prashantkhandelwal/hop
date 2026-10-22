@@ -52,16 +52,6 @@ jobs:
           "version=$($package[0].version)" >> $env:GITHUB_OUTPUT
           "HOP_VERSION=$($package[0].version)" >> $env:GITHUB_ENV
 
-      - name: Package Windows binary ZIP
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          HOP_BINARY: ${{ matrix.binary }}
-        run: |
-          New-Item -ItemType Directory -Path dist | Out-Null
-          Compress-Archive -LiteralPath @($env:HOP_BINARY, 'LICENSE', 'README.md') `
-            -DestinationPath "dist\hop-${env:HOP_VERSION}-windows-x86_64.zip"
-
       - name: Package Linux binary ZIP
         if: runner.os == 'Linux'
         env:
@@ -78,6 +68,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload binary ZIP
+        if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: hop-${{ matrix.platform }}-zip
@@ -116,12 +107,12 @@ jobs:
             "enabled=$($state.Approved.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
             "mode=manifest" >> $env:GITHUB_OUTPUT
             if (-not $state.Approved) {
-              Write-Output "::notice::$($state.Reason) MSI packaging is disabled; binary builds continue."
+              Write-Output "::notice::$($state.Reason) Windows MSI and portable ZIP packaging are disabled; binary builds continue."
             }
           }
 
   windows-installer:
-    name: Windows MSI with approved video runtime
+    name: Windows MSI and portable ZIP with approved video runtime
     needs: runtime-configuration
     if: needs.runtime-configuration.outputs.enabled == 'true'
     runs-on: windows-2022
@@ -195,6 +186,47 @@ jobs:
       - name: Build Windows installer
         shell: pwsh
         run: .\wix\build-installer.ps1 -RuntimeDirectory $env:HOP_MPV_RUNTIME -WixBin $env:HOP_WIX_BIN
+
+      - name: Package Windows portable ZIP with approved runtime
+        shell: pwsh
+        run: |
+          $metadata = cargo metadata --no-deps --format-version 1 --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read Cargo package metadata.' }
+          $package = @(($metadata | ConvertFrom-Json).packages | Where-Object { $_.name -eq 'hop' })
+          if ($package.Count -ne 1) { throw 'Expected exactly one Hop package.' }
+          $target = ($metadata | ConvertFrom-Json).target_directory
+          $binary = Join-Path $target 'release\hop.exe'
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf) -or (Get-Item -LiteralPath $binary).Length -eq 0) {
+            throw 'Missing or empty Hop release executable.'
+          }
+          $runtime = (Resolve-Path -LiteralPath $env:HOP_MPV_RUNTIME).Path
+          foreach ($required in @('libmpv-2.dll', 'THIRD-PARTY-NOTICES.txt', 'SOURCE.txt')) {
+            $file = Join-Path $runtime $required
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf) -or (Get-Item -LiteralPath $file).Length -eq 0) {
+              throw "Approved runtime bundle must contain a nonempty $required at its root."
+            }
+          }
+          foreach ($reserved in @('hop.exe', 'LICENSE', 'README.md')) {
+            if (Test-Path -LiteralPath (Join-Path $runtime $reserved)) {
+              throw "Runtime bundle conflicts with reserved portable file $reserved."
+            }
+          }
+          $staging = Join-Path $env:RUNNER_TEMP 'hop-portable'
+          New-Item -ItemType Directory -Path $staging | Out-Null
+          foreach ($item in Get-ChildItem -LiteralPath $runtime -Force) {
+            Copy-Item -LiteralPath $item.FullName -Destination $staging -Recurse -Force
+          }
+          Copy-Item -LiteralPath $binary, 'LICENSE', 'README.md' -Destination $staging
+          New-Item -ItemType Directory -Path dist | Out-Null
+          $archive = Join-Path (Get-Location) "dist\hop-$($package[0].version)-windows-x86_64.zip"
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $archive)
+
+      - name: Upload Windows portable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: hop-windows-x86_64-zip
+          path: dist/*.zip
+          if-no-files-found: error
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4

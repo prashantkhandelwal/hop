@@ -43,8 +43,10 @@ current user into `%LOCALAPPDATA%\Programs\Hop`; the destination-folder screen
 lets the user choose another writable location without administrator privileges.
 It adds **Hop** and **Hop Settings** Start menu
 shortcuts, and includes the app icon, Hop's license, and your approved libmpv
-runtime bundle. It does not add Hop to PATH, enable startup, or launch it
-automatically. Startup remains opt-in through Settings.
+runtime bundle. The final screen offers an unchecked **Launch Hop** checkbox;
+select it before clicking **Finish** to start the tray watcher. Silent installs
+and repair/uninstall flows do not launch Hop. The installer does not add Hop to
+PATH or enable startup. Startup remains opt-in through Settings.
 
 Install the MSVC build tools, Rust, and
 [WiX 3.14.1](https://github.com/wixtoolset/wix3/releases/tag/wix3141rtm), then:
@@ -59,7 +61,12 @@ cargo install cargo-wix --version 0.3.9 --locked
 `WixBin` must contain `candle.exe`, `light.exe`, and `heat.exe`. If omitted, the
 script uses `%WIX%\bin` or finds `candle.exe` on PATH. Output is
 `target\wix\hop-<version>-x86_64.msi`. Exit any running Hop watcher before
-installing, upgrading, or uninstalling. Increase the package version in
+installing or upgrading. During uninstall, the installer requests that running
+Hop windows and the tray watcher close, using a 10-second shutdown timeout before
+removing files. If Hop remains running, uninstall stops with instructions to exit Hop and
+retry; it does not force-kill the application. This also applies to silent
+uninstalls, which report failure through the installer exit status/log.
+Increase the package version in
 `Cargo.toml` for a new upgrade release; keep the MSI UpgradeCode and existing
 component GUIDs stable. Installers are unsigned unless you sign them separately.
 Validate installation, upgrading, playback, and removal in a clean Windows VM

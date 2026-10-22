@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
   <Product Id="*" Name="Hop" Language="1033" Version="$(var.Version)"
            Manufacturer="Prashant Khandelwal"
            UpgradeCode="09956567-F1FB-46C0-A80B-527969C5C0EB">
@@ -16,6 +17,24 @@
     <Property Id="ARPHELPLINK" Value="https://github.com/prashantkhandelwal/hop"/>
 
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER"/>
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch Hop"/>
+    <CustomAction Id="LaunchHop" FileKey="HopExe" ExeCommand="--watch"
+                  Execute="immediate" Return="asyncNoWait" Impersonate="yes"/>
+    <util:CloseApplication Id="CloseHopBeforeUninstall" Target="hop.exe"
+                           CloseMessage="yes" Timeout="10" RebootPrompt="no"
+                           Property="HOP_STILL_RUNNING">
+      Installed AND REMOVE = "ALL"
+    </util:CloseApplication>
+    <CustomAction Id="EnsureHopClosed"
+                  Error="Hop is still running. Exit Hop from its tray menu, close any remaining Hop windows, and retry uninstalling."/>
+    <InstallExecuteSequence>
+      <Custom Action="WixCloseApplications" Before="EnsureHopClosed">
+        Installed AND REMOVE = "ALL"
+      </Custom>
+      <Custom Action="EnsureHopClosed" Before="RemoveFiles">
+        Installed AND REMOVE = "ALL" AND HOP_STILL_RUNNING
+      </Custom>
+    </InstallExecuteSequence>
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="LocalAppDataFolder">
@@ -53,6 +72,11 @@
       <ComponentGroupRef Id="MpvRuntime"/>
     </Feature>
     <UIRef Id="WixUI_InstallDir"/>
+    <UI>
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchHop" Order="1">
+        WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed
+      </Publish>
+    </UI>
     <WixVariable Id="WixUILicenseRtf" Value="$(var.HopLicenseRtf)"/>
   </Product>
 </Wix>

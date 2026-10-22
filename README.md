@@ -24,6 +24,17 @@ typically include `build-essential`, `pkg-config`, `libx11-dev`,
 `libxi-dev`, `libxcursor-dev`, `libxrandr-dev`, `libxkbcommon-dev`,
 `libwayland-dev`, and `libegl1-mesa-dev`.
 
+### Automated builds
+
+The [build workflow](.github/workflows/build.yml) runs on every push to any
+branch or tag. It builds release binaries with stable Rust and the committed
+lockfile on Windows Server 2022 and Ubuntu 24.04 (both x86-64).
+Download `hop-windows-x86_64` or `hop-linux-x86_64` from the workflow run's
+Artifacts section. On Linux, run `chmod +x hop` after extracting the binary.
+Artifacts contain only Hop; video playback still requires the
+[libmpv runtime](#video-runtime), and Linux requires the desktop/runtime
+libraries described above.
+
 ## Windows Explorer: Space to preview
 
 ```powershell

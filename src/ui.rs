@@ -51,6 +51,12 @@ fn preview_viewport(activate: bool) -> egui::ViewportBuilder {
 
 pub fn show_settings() -> Result<(), String> {
     let mut pending = crate::settings::Settings::load();
+    #[cfg(windows)]
+    let mut startup = crate::startup::enabled();
+    #[cfg(windows)]
+    if let Err(error) = &startup {
+        eprintln!("Hop: {error}");
+    }
     if let Err(error) = &pending {
         eprintln!("Hop: {error}");
     }
@@ -60,8 +66,8 @@ pub fn show_settings() -> Result<(), String> {
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_icon(crate::app_icon::load()?)
-                .with_inner_size([440.0, 240.0])
-                .with_min_inner_size([400.0, 240.0]),
+                .with_inner_size([480.0, 300.0])
+                .with_min_inner_size([440.0, 300.0]),
             ..Default::default()
         },
         move |ctx, _frame| {
@@ -82,15 +88,32 @@ pub fn show_settings() -> Result<(), String> {
                                 .suffix(" s")
                                 .step_by(0.5),
                         );
+                        #[cfg(windows)]
+                        show_startup_setting(ui, &mut startup);
                         ui.add_space(8.0);
-                        ui.label("Changes apply when you reopen the preview.");
+                        ui.label("Playback changes apply when you reopen the preview.");
                         if let Some(error) = &save_error {
                             ui.colored_label(ui.visuals().error_fg_color, error);
                         }
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Save").clicked() {
-                                match settings.save() {
+                            #[cfg(windows)]
+                            let can_save = startup.is_ok();
+                            #[cfg(not(windows))]
+                            let can_save = true;
+                            if ui.add_enabled(can_save, egui::Button::new("Save")).clicked() {
+                                let result = (|| {
+                                    settings.save()?;
+                                    #[cfg(windows)]
+                                    crate::startup::set_enabled(
+                                        *startup.as_ref().map_err(|error| error.clone())?,
+                                    )
+                                    .map_err(|error| format!(
+                                        "Playback settings were saved, but startup could not be updated: {error}"
+                                    ))?;
+                                    Ok::<(), String>(())
+                                })();
+                                match result {
                                     Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                                     Err(error) => {
                                         eprintln!("Hop: {error}");
@@ -103,6 +126,10 @@ pub fn show_settings() -> Result<(), String> {
                             }
                             if ui.button("Restore defaults").clicked() {
                                 *settings = crate::settings::Settings::default();
+                                #[cfg(windows)]
+                                {
+                                    startup = Ok(false);
+                                }
                                 save_error = None;
                             }
                         });
@@ -111,6 +138,10 @@ pub fn show_settings() -> Result<(), String> {
                         ui.colored_label(ui.visuals().error_fg_color, error);
                         if ui.button("Reset to defaults").clicked() {
                             pending = Ok(crate::settings::Settings::default());
+                            #[cfg(windows)]
+                            {
+                                startup = Ok(false);
+                            }
                         }
                     }
                 }
@@ -118,6 +149,28 @@ pub fn show_settings() -> Result<(), String> {
         },
     )
     .map_err(|error| format!("Cannot open settings: {error}"))
+}
+
+#[cfg(windows)]
+fn show_startup_setting(ui: &mut egui::Ui, startup: &mut Result<bool, String>) {
+    match startup {
+        Ok(enabled) => {
+            ui.checkbox(enabled, "Start Hop when I sign in to Windows")
+                .on_hover_text("Save to enable or disable startup for your Windows account. Keep Hop at its current location.");
+        }
+        Err(error) => {
+            ui.colored_label(ui.visuals().error_fg_color, error.as_str());
+            if ui.button("Retry startup setting").clicked() {
+                *startup = crate::startup::enabled();
+                if let Err(error) = startup {
+                    eprintln!("Hop: {error}");
+                }
+            }
+            if ui.button("Disable startup on Save").clicked() {
+                *startup = Ok(false);
+            }
+        }
+    }
 }
 
 pub fn show_about() -> Result<(), String> {
@@ -1019,6 +1072,47 @@ fn file_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn startup_checkbox_changes_the_pending_value_without_applying_it() {
+        let ctx = egui::Context::default();
+        let mut startup = Ok(false);
+        let output = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                show_startup_setting(ui, &mut startup);
+            });
+        });
+        let label = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text() == "Start Hop when I sign in to Windows" =>
+                {
+                    Some(text.pos + text.galley.size() / 2.0)
+                }
+                _ => None,
+            })
+            .expect("Expected Windows startup checkbox");
+        assert_eq!(startup, Ok(false));
+        for enabled in [true, false] {
+            for pressed in [true, false] {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        events: pointer_button(label, pressed),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            show_startup_setting(ui, &mut startup);
+                        });
+                    },
+                );
+            }
+            assert_eq!(startup, Ok(enabled));
+        }
+    }
 
     #[test]
     fn file_sizes_cover_bytes_and_binary_unit_boundaries() {

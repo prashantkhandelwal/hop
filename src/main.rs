@@ -6,6 +6,8 @@ mod media;
 mod preview;
 mod settings;
 #[cfg(windows)]
+mod startup;
+#[cfg(windows)]
 mod tray;
 mod ui;
 #[cfg(windows)]

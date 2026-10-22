@@ -43,8 +43,9 @@ unless you start a new click outside.
 Right-click the tray icon for:
 
 - **Settings**: configure default video volume (0-100%) and controls auto-hide
-  delay (0.5-30 seconds). Save applies to previews opened afterward; reopen an
-  existing preview to use the new settings.
+  delay (0.5-30 seconds), and optionally enable **Start Hop when I sign in to
+  Windows**. Save applies playback changes to previews opened afterward; reopen
+  an existing preview to use them. Startup changes are registered when you Save.
 - **About**: show Hop's version and a short description.
 - **Exit**: remove the tray icon, stop the watcher, and close the preview,
   Settings, and About windows opened by that watcher.
@@ -61,6 +62,18 @@ in `%APPDATA%\hop\settings.json` on Windows and
 Missing settings use the existing defaults of 70% volume and a two-second
 auto-hide delay. Invalid settings produce an explicit error; open Settings to
 reset them, then Save. Saving replaces the file atomically.
+
+Windows startup is opt-in and applies only to your Windows account. The checkbox
+reads the current `Hop` entry under
+`HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`, rather than
+duplicating that state in the JSON settings. Saving it checked registers the
+current executable with `--watch`, so Hop starts in the tray at your next sign-in.
+Saving it unchecked removes that entry but does not stop an already-running
+watcher. Cancel leaves startup unchanged. **Restore defaults** unchecks startup;
+Save is still required. Keep the executable at its current location, or reopen
+Settings from its new location and Save to update the startup command.
+Registration errors remain visible in Settings; startup-read errors offer Retry
+or **Disable startup on Save**. Linux startup integration is not included.
 
 - Keep using **Left**, **Right**, **Up**, or **Down** in Explorer to select files.
   The same preview
@@ -111,8 +124,8 @@ reset them, then Save. Saving replaces the file atomically.
   file-open dialogs, other file managers, and virtual shell items are not supported.
 - Failures are printed to the watcher's terminal; file-loading errors also appear
   in the preview window.
-- No administrator permissions, startup registration, shell modifications, or
-  global hotkey registration are needed.
+- No administrator permissions, shell modifications, or global hotkey
+  registration are needed. Windows sign-in startup is optional.
 - Outside-click detection observes mouse presses without blocking or consuming
   them, so the destination application still receives its click. Merely moving
   the mouse, scrolling, or keeping keyboard focus in Explorer does not dismiss

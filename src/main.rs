@@ -11,6 +11,8 @@ mod startup;
 mod tray;
 mod ui;
 #[cfg(windows)]
+mod watcher_instance;
+#[cfg(windows)]
 mod windows;
 
 use std::ffi::OsString;

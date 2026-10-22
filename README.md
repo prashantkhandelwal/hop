@@ -244,6 +244,14 @@ Running Hop without arguments on Windows also starts the watcher and adds an
 **Hop preview-window/spacebar** icon to the Windows notification area (possibly in the hidden-icons
 overflow). Leave it running, select a file in an Explorer file-list pane,
 and press **Space**.
+Only one tray watcher can run per Windows user, including when launched from
+different Hop copies or through sign-in startup. Starting another watcher exits
+without adding a second tray icon; terminal launches report that Hop is already
+running. Preview, Settings, and About windows still use their own processes.
+The watcher holds an exclusive handle to `%LOCALAPPDATA%\hop\watcher.lock`.
+Windows releases it automatically on exit or a crash; the empty lock file is
+retained and does not prevent restarting Hop.
+
 The preview stays **always on top** and opens **without taking focus from Explorer**.
 Press **Space** or **Escape** in Explorer's file list or in the preview to close it.
 Clicking outside the preview window also closes it, including clicking a file
@@ -328,7 +336,7 @@ or **Disable startup on Save**. Linux startup integration is not included.
 - Only unmodified Space in an Explorer file-list control triggers a preview.
   Search, address, and rename fields are excluded.
 - The first selected item is previewed when multiple items are selected.
-- Only one preview is opened by each watcher at a time. Run only one watcher.
+- Only one watcher runs per Windows user, with one managed preview at a time.
 - The watcher observes keys; it does not suppress Explorer's own Space behavior.
 - Explorer tabs are matched against the focused shell view. Desktop icons,
   file-open dialogs, other file managers, and virtual shell items are not supported.

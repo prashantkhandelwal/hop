@@ -1072,6 +1072,10 @@ fn launch_preview(shell: &IShellWindows) -> Result<Option<Child>, String> {
 }
 
 pub fn watch() -> Result<(), String> {
+    let Some(_instance) = crate::watcher_instance::WatcherInstance::acquire()? else {
+        println!("Hop is already watching Explorer. Use the existing tray icon.");
+        return Ok(());
+    };
     unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
         .ok()
         .map_err(|error| format!("Cannot initialize Windows COM: {error}"))?;

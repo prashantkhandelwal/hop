@@ -10,6 +10,8 @@ jobs:
   build:
     name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
+    outputs:
+      version: ${{ steps.package.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
@@ -39,11 +41,47 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked
 
+      - name: Read package version
+        id: package
+        shell: pwsh
+        run: |
+          $metadata = cargo metadata --no-deps --format-version 1 --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read Cargo package metadata.' }
+          $package = @(($metadata | ConvertFrom-Json).packages | Where-Object { $_.name -eq 'hop' })
+          if ($package.Count -ne 1) { throw 'Expected exactly one Hop package.' }
+          "version=$($package[0].version)" >> $env:GITHUB_OUTPUT
+          "HOP_VERSION=$($package[0].version)" >> $env:GITHUB_ENV
+
+      - name: Package Windows binary ZIP
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          HOP_BINARY: ${{ matrix.binary }}
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Compress-Archive -LiteralPath @($env:HOP_BINARY, 'LICENSE', 'README.md') `
+            -DestinationPath "dist\hop-${env:HOP_VERSION}-windows-x86_64.zip"
+
+      - name: Package Linux binary ZIP
+        if: runner.os == 'Linux'
+        env:
+          HOP_BINARY: ${{ matrix.binary }}
+        run: |
+          mkdir -p dist
+          zip -j "dist/hop-${HOP_VERSION}-linux-x86_64.zip" "$HOP_BINARY" LICENSE README.md
+
       - name: Upload release binary
         uses: actions/upload-artifact@v4
         with:
           name: hop-${{ matrix.platform }}
           path: ${{ matrix.binary }}
+          if-no-files-found: error
+
+      - name: Upload binary ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: hop-${{ matrix.platform }}-zip
+          path: dist/*.zip
           if-no-files-found: error
 
   runtime-configuration:
@@ -164,3 +202,70 @@ jobs:
           name: hop-windows-x86_64-msi
           path: target/wix/*.msi
           if-no-files-found: error
+
+  release:
+    name: Publish tagged release
+    needs: [build, runtime-configuration, windows-installer]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Require successful builds and installer
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          RUNTIME_RESULT: ${{ needs.runtime-configuration.result }}
+          INSTALLER_RESULT: ${{ needs.windows-installer.result }}
+          PACKAGE_VERSION: ${{ needs.build.outputs.version }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$BUILD_RESULT" != success || "$RUNTIME_RESULT" != success || "$INSTALLER_RESULT" != success ]]; then
+            echo "::error::Release requires successful Windows/Linux builds and a Windows MSI. Configure an approved runtime; skipped or failed installer packaging cannot be released."
+            exit 1
+          fi
+          if [[ "$RELEASE_TAG" != "v$PACKAGE_VERSION" ]]; then
+            echo "::error::Release tag must exactly match v$PACKAGE_VERSION from Cargo.toml."
+            exit 1
+          fi
+
+      - name: Download binary ZIPs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: hop-*-zip
+          merge-multiple: true
+          path: release-assets
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@v4
+        with:
+          name: hop-windows-x86_64-msi
+          path: release-assets
+
+      - name: Verify complete release asset set
+        env:
+          PACKAGE_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          for platform in windows-x86_64 linux-x86_64; do
+            if [[ ! -s "release-assets/hop-${PACKAGE_VERSION}-${platform}.zip" ]]; then
+              echo "::error::Missing binary ZIP for $platform."
+              exit 1
+            fi
+          done
+          shopt -s nullglob
+          installers=(release-assets/*.msi)
+          if [[ ${#installers[@]} -ne 1 || ! -s "${installers[0]}" ]]; then
+            echo "::error::Expected exactly one nonempty Windows MSI."
+            exit 1
+          fi
+
+      - name: Publish installer and binary ZIPs
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Hop ${{ github.ref_name }}
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/hop-${{ needs.build.outputs.version }}-windows-x86_64.zip
+            release-assets/hop-${{ needs.build.outputs.version }}-linux-x86_64.zip
+            release-assets/*.msi

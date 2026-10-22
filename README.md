@@ -35,6 +35,37 @@ Binary artifacts contain only Hop; video playback still requires the
 [libmpv runtime](#video-runtime), and Linux requires the desktop/runtime
 libraries described above.
 
+### GitHub Releases
+
+Push a version tag matching the package version in `Cargo.toml` to publish a
+GitHub Release. For example, for version `0.1.0`:
+
+```text
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow publishes these release assets:
+
+- `hop-0.1.0-windows-x86_64.zip`
+- `hop-0.1.0-linux-x86_64.zip`
+- `hop-0.1.0-x86_64.msi`
+
+Each binary ZIP contains the executable, `LICENSE`, and `README.md` at its root.
+These are binary-only packages, not self-contained video-runtime bundles.
+Install the libmpv/runtime dependencies described above separately, or use the
+Windows MSI with its approved bundled runtime. The Linux ZIP preserves the
+executable permission; extract with a tool that preserves Unix permissions.
+
+Publishing requires both platform builds and MSI packaging to succeed. If the
+approved runtime is not configured and the MSI job is skipped, the release job
+fails without publishing a release. A tag that does not match the Cargo package
+version is also rejected. Tags containing a hyphen, such as `v0.2.0-rc.1`, are
+marked as prereleases and must match the corresponding Cargo version.
+Release notes are generated automatically. Ordinary branch pushes do not
+publish releases; raw binary and versioned ZIP artifacts remain available from
+the workflow run.
+
 ### Windows installer (cargo-wix)
 
 The [MSI definition](wix/main.wxs) uses **cargo-wix 0.3.9** and **WiX Toolset

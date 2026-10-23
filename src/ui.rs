@@ -189,7 +189,7 @@ pub fn show_about() -> Result<(), String> {
                 ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
                 ui.add_space(12.0);
                 ui.label("Quick file previews for Windows and Linux.");
-                ui.label("Images, GIFs, video, text, folders, and file metadata.");
+                ui.label("Images, GIFs, PDFs, video, text, folders, and file metadata.");
                 ui.add_space(12.0);
                 if ui.button("Close").clicked() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -816,7 +816,7 @@ impl eframe::App for PreviewApp {
 }
 
 impl PreviewApp {
-    fn show_content(&self, ctx: &egui::Context) {
+    fn show_content(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(egui::Color32::from_gray(240)))
             .show(ctx, |ui| {
@@ -832,7 +832,7 @@ impl PreviewApp {
                 if let Some(error) = &self.control_error {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
-                let Some(preview) = &self.preview else {
+                let Some(preview) = &mut self.preview else {
                     let rect = egui::Rect::from_center_size(
                         ui.max_rect().center(),
                         egui::Vec2::splat(ui.spacing().interact_size.y),
@@ -840,7 +840,8 @@ impl PreviewApp {
                     ui.put(rect, egui::Spinner::new());
                     return;
                 };
-                match &preview.content {
+                match &mut preview.content {
+                    Content::Pdf(pdf) => pdf.show(ui),
                     Content::Image { .. } | Content::Animation(_) | Content::Video => {
                         if let Some(texture) = &self.texture {
                             let pane = ui.available_rect_before_wrap();
@@ -855,8 +856,10 @@ impl PreviewApp {
                             ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                             egui::ScrollArea::both().id_salt(&self.path).show(ui, |ui| {
                                 ui.add(
-                                    egui::Label::new(egui::RichText::new(text).monospace())
-                                        .wrap_mode(egui::TextWrapMode::Extend),
+                                    egui::Label::new(
+                                        egui::RichText::new(text.as_str()).monospace(),
+                                    )
+                                    .wrap_mode(egui::TextWrapMode::Extend),
                                 );
                             });
                         });

@@ -2,7 +2,7 @@
 
 <img src="assets/hop.svg" alt="Hop preview window and spacebar logo" width="96" height="96">
 
-A Rust quick-preview app for Windows and Linux. Preview images, UTF-8 text/source
+A Rust quick-preview app for Windows and Linux. Preview images, PDFs, UTF-8 text/source
 files, folders, and file metadata without opening the file's normal application.
 
 ## Build
@@ -392,6 +392,7 @@ are intentionally outside this version's scope.
 | --- | --- |
 | Images | PNG, JPEG, BMP, ICO, TIFF/TIF (first page), WebP, PNM, TGA, QOI |
 | Animated GIF | Native Rust animation with frame timing and looping |
+| PDF | In-pane page navigation, fit-to-page, zoom, and scrolling; embedded Rust renderer, no separate runtime |
 | Video with audio | In-pane autoplay and looping using libmpv; MP4, MKV, WebM, MOV, AVI, WMV, MPEG, M4V, TS/MTS/M2TS, OGV, FLV, 3GP |
 | Text/source | UTF-8 text, up to 256 KiB, selectable read-only content |
 | Folders | Centered side-by-side group with a folder icon and name on the left and scrollable contents on the right; up to 200 entries sorted within the displayed subset |
@@ -421,7 +422,16 @@ shell file-type icon; Linux and unavailable Windows associations use a generic
 document icon with an extension
 badge. Icon lookup failures are logged to the terminal.
 
-PDFs, office documents, archives, executables, standalone audio, and other known
+PDFs open on the first page. Use Previous/Next buttons, the page-number control, keyboard shortcuts (arrow keys, Page Up/Down, Home, End), or scroll wheel to
+navigate (scroll navigates pages in fit-to-page mode; when zoomed, scrolling at the page edge advances to the next or previous page, while scrolling in the middle scrolls the content). Fit page to fit the whole page, and the percentage control to zoom
+(25-300%); Ctrl+Scroll wheel also changes zoom. Enlarged pages scroll in both directions. Parsing and page rendering
+run on worker threads. PDFs are limited to 64 MiB on disk and page rasters to
+2,400 pixels per axis; only the current page is retained by the viewer.
+Password-protected PDFs requiring a password and invalid PDFs show an explicit
+error. The renderer does not execute embedded scripts or open document links;
+PDF forms, text selection, and password entry are not supported.
+
+Office documents, archives, executables, standalone audio, and other known
 binary formats use this fallback even when the file happens to contain ASCII.
 Unknown binary/non-UTF-8 files and oversized images also use it. Plain-text
 files with unrecognized extensions can still be previewed as text.

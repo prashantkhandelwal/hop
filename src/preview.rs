@@ -22,6 +22,7 @@ pub struct Preview {
 }
 
 pub enum Content {
+    Pdf(Box<crate::pdf::PdfPreview>),
     Animation(Vec<AnimationFrame>),
     Video,
     Image {
@@ -49,6 +50,11 @@ pub fn load(path: &Path) -> Result<Preview, String> {
         load_directory(path)?
     } else if !metadata.is_file() {
         unsupported(path, metadata.len())
+    } else if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+    {
+        Content::Pdf(Box::new(crate::pdf::PdfPreview::load(path)?))
     } else if is_video(path) {
         Content::Video
     } else if is_image(path) {
@@ -91,8 +97,7 @@ fn is_document_or_binary(path: &Path) -> bool {
         .is_some_and(|extension| {
             matches!(
                 extension.to_ascii_lowercase().as_str(),
-                "pdf"
-                    | "doc"
+                "doc"
                     | "docx"
                     | "xls"
                     | "xlsx"
@@ -400,7 +405,7 @@ mod tests {
     #[test]
     fn unsupported_documents_show_file_type_and_exact_size_even_if_ascii() {
         let dir = TestDirectory::new();
-        for extension in ["PDF", "docx", "zip", "mp3"] {
+        for extension in ["docx", "zip", "mp3"] {
             let path = dir.0.join(format!("unsupported.{extension}"));
             fs::write(&path, b"not a supported text document").unwrap();
             let Content::Unsupported {
@@ -433,10 +438,7 @@ mod tests {
         }
         let path = dir.0.join("empty.pdf");
         fs::write(&path, []).unwrap();
-        assert!(matches!(
-            load(&path).unwrap().content,
-            Content::Unsupported { bytes: 0, .. }
-        ));
+        assert!(load(&path).is_err());
     }
 
     #[test]

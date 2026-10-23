@@ -3,6 +3,7 @@
 mod app_icon;
 mod file_icon;
 mod media;
+mod pdf;
 mod preview;
 mod settings;
 #[cfg(windows)]

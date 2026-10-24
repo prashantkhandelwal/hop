@@ -2,548 +2,375 @@
 
 <img src="assets/hop.svg" alt="Hop preview window and spacebar logo" width="96" height="96">
 
-A Rust quick-preview app for Windows and Linux. Preview images, PDFs, UTF-8 text/source
-files, folders, and file metadata without opening the file's normal application.
+Quick file previews for Windows and Linux. Preview images, PDFs, UTF-8 text/source files, folders, and file metadata without opening files in their default applications.
 
-## Build
+---
 
-Install a current stable Rust toolchain (Rust 1.93 or later recommended).
+## Quick Start
 
-```text
+### Windows
+
+1. **Download** the [latest release](https://github.com/prashantkhandelwal/hop/releases) MSI or ZIP
+2. **Install** and launch Hop — the tray icon appears in your notification area
+3. **Select a file** in Windows Explorer and press **Space** to preview it
+4. **Close** with **Space**, **Escape**, or by clicking outside the preview
+
+### Linux
+
+```bash
+hop /path/to/file
+```
+
+Hop is CLI-based on Linux. Integrate with your file manager by creating a custom action that passes the selected file path to `hop`.
+
+---
+
+## What Can I Preview?
+
+| Type | Supported Formats |
+| --- | --- |
+| **Images** | PNG, JPEG, BMP, ICO, TIFF/TIF, WebP, PNM, TGA, QOI |
+| **Animated GIF** | Full animation with frame timing and looping |
+| **PDF** | Full document navigation, zoom, fit-to-page, and scrolling |
+| **Video** | MP4, MKV, WebM, MOV, AVI, WMV, MPEG, M4V, TS, OGV, FLV, 3GP (with audio) |
+| **Text/Source** | Any UTF-8 text file, up to 256 KiB |
+| **Folders** | Directory listing with icon and contents |
+| **Other Files** | File type icon, name, and size |
+
+---
+
+## Windows Explorer: Space to Preview
+
+### How It Works
+
+- **Start the watcher:** Run `hop --watch` or double-click the executable
+- **Select a file** in an Explorer file-list pane
+- **Press Space** to preview it in an always-on-top window
+- **Navigate** with arrow keys to move through selected files
+- **Close** by pressing **Space**, **Escape**, or clicking outside
+
+### Tray Menu
+
+Right-click the tray icon:
+
+- **Settings:** Adjust video volume (0–100%), controls auto-hide delay (0.5–30 seconds), and optionally enable startup at sign-in
+- **About:** View the app icon, version, and tagline: "A quick peek. A smoother workflow."
+- **Exit:** Close the watcher and all open preview windows
+
+Settings and About are fixed-size windows without minimize or maximize buttons. Settings actions use large buttons pinned to the bottom.
+
+### Behavior & Limits
+
+- Only one watcher runs per Windows user
+- Only one managed preview appears at a time
+- The preview **always stays on top** and opens **without taking focus**
+- Clicking in the preview (content, title bar, or controls) keeps it open
+- Clicking outside the preview closes it
+- Multiple selected files preview the first one
+- Stale Quick Access shortcuts show their names when files no longer exist (no error)
+- Desktop icons, file-open dialogs, and other file managers are not supported
+
+### Configuration
+
+Settings are stored as JSON:
+- **Windows:** `%APPDATA%\hop\settings.json`
+- **Linux:** `$XDG_CONFIG_HOME/hop/settings.json` or `~/.config/hop/settings.json`
+
+Default settings: 70% volume, 2-second auto-hide delay, startup disabled.
+
+---
+
+## Direct Preview: Windows and Linux
+
+Open a preview from the command line:
+
+```bash
+hop /path/to/file
+hop --preview /path/to/file
+hop -- filename-starting-with-dash
+```
+
+Close with **Space**, **Escape**, or the window close button.
+
+### Differences from Watcher Mode
+
+- Standalone previews **take focus** when opened (unlike watcher mode)
+- **Arrow keys do not control file selection** (Explorer isn't running)
+- Windows: same outside-click dismissal as watcher mode
+- Linux: closes when it loses focus (Wayland may not support always-on-top)
+
+---
+
+## Video Playback
+
+Video plays automatically with audio at your configured volume and loops until closed.
+
+### Requirements
+
+**libmpv client API 2** with the software render API is required for video.
+
+**Windows (x64):**
+1. Download `libmpv-2.dll` from [mpv-winbuild-cmake releases](https://github.com/shinchiro/mpv-winbuild-cmake/releases)
+2. Place beside the executable: `target\release\libmpv-2.dll`
+
+**Linux:**
+```bash
+sudo apt install libmpv2       # Debian/Ubuntu
+sudo pacman -S mpv             # Arch Linux
+```
+
+**Alternative:** Set `HOP_MPV_LIBRARY` environment variable to the full path of `libmpv` (must be from a trusted source).
+
+---
+
+## Preview Limits & Details
+
+### Image Handling
+
+- **Disk limit:** 64 MiB
+- **Decode budget:** 256 MiB
+- **Dimension limits:** 16,384 pixels per axis
+- **Texture size:** Reduced to 4,096 pixels per axis
+- **Aspect ratio:** Preserved; centered and scaled to fit
+
+### GIF Handling
+
+- **Frame limit:** 500 frames
+- **Memory limit:** 128 MiB of retained frame data
+- **Dimension limit:** 2,048 pixels per axis
+- **Min delay:** Frame delays below 20 ms are clamped to 20 ms
+- **Exceeding limits:** Shows explicit error
+
+### PDF Handling
+
+- **Disk limit:** 64 MiB
+- **Page raster limit:** 2,400 pixels per axis
+- **Navigation:** Arrow keys, Page Up/Down, Home, End, scroll wheel
+- **Zoom:** 25–300% (Ctrl+Scroll to adjust)
+- **Fit-to-page mode:** Scroll wheel navigates pages
+- **Zoomed mode:** Scroll at edge advances pages; scroll in center scrolls content
+- **Limitations:** No forms, text selection, embedded scripts, document links, or password entry
+
+### Text/Source Files
+
+- **Limit:** 256 KiB
+- **Format:** UTF-8 only
+- **Display:** Read-only, selectable, 16-point padding
+- **Recognition:** Supports files without recognized extensions
+
+### Folder Display
+
+- **Layout:** Centered group with folder icon/name on left, scrollable contents on right
+- **Limit:** Up to 200 entries
+- **Sorting:** Sorted within displayed subset
+
+### Unsupported & Other Formats
+
+- **Office documents, archives, executables, standalone audio:** Show icon, name, and size
+- **Binary/non-UTF-8 files:** Show icon, name, and size
+- **Missing/unreadable files:** Show explicit error
+- **Decoding errors:** Show explicit error
+
+### Loading & Errors
+
+- **Loading spinner:** Animated while content loads
+- **Errors:** Displayed when needed; truncation notices written to terminal
+- **No headers/details:** Clean pane with just the preview content
+- **Background:** Light grey pane background
+
+---
+
+## Building from Source
+
+### Prerequisites
+
+**Windows:**
+- Rust 1.93+ (stable)
+- MSVC C++ build tools
+- (Optional) libmpv-2.dll for video support
+
+**Linux:**
+- Rust 1.93+ (stable)
+- X11 or Wayland session with OpenGL/EGL
+- Build tools: `build-essential pkg-config libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev`
+
+### Build
+
+```bash
 cargo build --release
 ```
 
-The release binary is `target\release\hop.exe` on Windows and `target/release/hop`
-on Linux. Start the Windows watcher with `.\target\release\hop.exe --watch`,
-or double-click the Windows release executable. Release builds do not create
-a console window; commands launched from a terminal can still print there.
+**Output:**
+- Windows: `target\release\hop.exe`
+- Linux: `target/release/hop`
 
-Windows requires the MSVC C++ build tools. On Linux, a graphical X11 or Wayland
-session and OpenGL/EGL drivers are required. On Debian/Ubuntu, build prerequisites
-typically include `build-essential`, `pkg-config`, `libx11-dev`,
-`libxi-dev`, `libxcursor-dev`, `libxrandr-dev`, `libxkbcommon-dev`,
-`libwayland-dev`, and `libegl1-mesa-dev`.
+**Run:**
+```bash
+./target/release/hop --watch      # Windows: start watcher
+./target/release/hop /path/file   # Any platform: preview a file
+```
 
-### Automated builds
+---
 
-The [build workflow](.github/workflows/build.yml) runs on every push to any
-branch or tag. It builds release binaries with stable Rust and the committed
-lockfile on Windows Server 2022 and Ubuntu 24.04 (both x86-64).
-Download `hop-windows-x86_64` or `hop-linux-x86_64` from the workflow run's
-Artifacts section. On Linux, run `chmod +x hop` after extracting the binary.
-Binary artifacts contain only Hop; video playback still requires the
-[libmpv runtime](#video-runtime), and Linux requires the desktop/runtime
-libraries described above.
+## Automated Builds
+
+### GitHub Actions
+
+The [build workflow](.github/workflows/build.yml) runs on every push.
+
+**Download artifacts:**
+- Windows: `hop-windows-x86_64` (portable ZIP)
+- Linux: `hop-linux-x86_64` (executable)
+
+**Extract:**
+- Windows: Extract to a folder; keep files together
+- Linux: `chmod +x hop` after extracting
 
 ### GitHub Releases
 
-Push a version tag matching the package version in `Cargo.toml` to publish a
-GitHub Release. For example, for version `0.1.0`:
+Tag a version matching `Cargo.toml`:
 
-```text
+```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The workflow publishes these release assets:
+**Publishes:**
+- `hop-0.1.0-windows-x86_64.zip` (portable)
+- `hop-0.1.0-linux-x86_64.zip` (with README, LICENSE)
+- `hop-0.1.0-x86_64.msi` (Windows installer, if runtime is approved)
 
-- `hop-0.1.0-windows-x86_64.zip`
-- `hop-0.1.0-linux-x86_64.zip`
-- `hop-0.1.0-x86_64.msi`
+---
 
-The Windows ZIP is a portable package containing `hop.exe`, `libmpv-2.dll`,
-`LICENSE`, and `README.md` at its root, along with all additional DLLs, notices,
-licenses, and source materials from the same approved runtime used by the MSI.
-Extract the entire ZIP into a folder before running Hop; keep its bundled files
-together. The Linux ZIP contains the executable, `LICENSE`, and `README.md`;
-install its libmpv/system dependencies separately. It preserves the executable
-permission; extract with a tool that preserves Unix permissions.
+## Windows Installer (MSI)
 
-Publishing requires both platform builds and MSI packaging to succeed. If the
-approved runtime is not configured, both the MSI and portable Windows ZIP are
-skipped, and the release job fails without publishing a release. A tag that does
-not match the Cargo package version is also rejected. Tags containing a hyphen,
-such as `v0.2.0-rc.1`, are
-marked as prereleases and must match the corresponding Cargo version.
-Release notes are generated automatically. Ordinary branch pushes do not
-publish releases; raw binary and versioned ZIP artifacts remain available from
-the workflow run.
+### Installation
 
-### Windows installer (cargo-wix)
+The MSI uses **cargo-wix 0.3.9** and **WiX Toolset 3.14.1**.
 
-The [MSI definition](wix/main.wxs) uses **cargo-wix 0.3.9** and **WiX Toolset
-3.14.1** (WiX 3, not the newer `wix` CLI). It defaults to installing for the
-current user into `%LOCALAPPDATA%\Programs\Hop`; the destination-folder screen
-lets the user choose another writable location without administrator privileges.
-It adds **Hop** and **Hop Settings** Start menu
-shortcuts, and includes the app icon, Hop's license, and your approved libmpv
-runtime bundle. The final screen offers an unchecked **Launch Hop** checkbox;
-select it before clicking **Finish** to start the tray watcher. Silent installs
-and repair/uninstall flows do not launch Hop. The installer does not add Hop to
-PATH or enable startup. Startup remains opt-in through Settings.
+**Features:**
+- Installs to `%LOCALAPPDATA%\Programs\Hop` (user-writable, no admin required)
+- Creates Start menu shortcuts for Hop and Hop Settings
+- Includes approved libmpv runtime (if configured)
+- Optional auto-start at sign-in
+- Full uninstall support
 
-Install the MSVC build tools, Rust, and
-[WiX 3.14.1](https://github.com/wixtoolset/wix3/releases/tag/wix3141rtm), then:
+### Building the Installer
 
+1. Install WiX 3.14.1: https://github.com/wixtoolset/wix3/releases/tag/wix3141rtm
+2. Install cargo-wix:
+   ```bash
+   cargo install cargo-wix --version 0.3.9 --locked
+   ```
+3. Prepare an approved libmpv runtime (see [Runtime Preparation](#runtime-preparation))
+4. Build:
+   ```powershell
+   .\wix\build-installer.ps1 `
+     -RuntimeDirectory 'C:\path\to\approved-runtime' `
+     -WixBin 'C:\tools\wix314'
+   ```
+
+**Output:** `target\wix\hop-<version>-x86_64.msi`
+
+### Uninstall
+
+- Use Windows Settings to uninstall
+- User preview settings are preserved
+- Unmanaged files in the installation folder are not deleted
+
+---
+
+## Runtime Preparation
+
+### Automated Runtime Setup (Recommended)
+
+Use the manifest-based workflow in [wix/prepare-runtime.ps1](wix/prepare-runtime.ps1).
+
+**Edit [wix/runtime-manifest.json](wix/runtime-manifest.json):**
+
+- `runtime`: URL, SHA-256, and extraction path for libmpv binary
+- `licenses`: License file URLs and SHA-256 hashes
+- `sources`: Source archive URLs for GPL/LGPL compliance
+- `components`: Dependency inventory with versions, licenses, and referenced materials
+- `review`: Reviewer name, date, and approval notes
+
+**Validate:**
 ```powershell
-cargo install cargo-wix --version 0.3.9 --locked
-.\wix\build-installer.ps1 `
-  -RuntimeDirectory 'C:\approved-mpv-runtime' `
-  -WixBin 'C:\tools\wix314'
-```
-
-`WixBin` must contain `candle.exe`, `light.exe`, and `heat.exe`. If omitted, the
-script uses `%WIX%\bin` or finds `candle.exe` on PATH. Output is
-`target\wix\hop-<version>-x86_64.msi`. Exit any running Hop watcher before
-installing or upgrading. During uninstall, the installer requests that running
-Hop windows and the tray watcher close, using a 10-second shutdown timeout before
-removing files. If Hop remains running, uninstall stops with instructions to exit Hop and
-retry; it does not force-kill the application. This also applies to silent
-uninstalls, which report failure through the installer exit status/log.
-Increase the package version in
-`Cargo.toml` for a new upgrade release; keep the MSI UpgradeCode and existing
-component GUIDs stable. Installers are unsigned unless you sign them separately.
-Validate installation, upgrading, playback, and removal in a clean Windows VM
-before distributing a release.
-
-**Approved runtime bundle:** provide a directory (or `.7z` archive for CI) with these
-nonempty files at its root, without an enclosing directory:
-
-```text
-libmpv-2.dll
-THIRD-PARTY-NOTICES.txt
-SOURCE.txt
-```
-
-Use an x86-64 libmpv client API 2 build. Include all additional DLLs it requires,
-all applicable license texts/notices, and the corresponding-source material
-required by that specific build. `THIRD-PARTY-NOTICES.txt` should identify the
-build and its licensing; `SOURCE.txt` should document how its corresponding
-source is provided. The entire directory, including subdirectories, is packaged.
-Do not include `hop.exe` or a root `LICENSE` file, which are reserved for Hop.
-The script checks architecture and required files, but cannot certify legal
-compliance: review the build's redistribution terms, source obligations, and
-runtime prerequisites before supplying it. No unreviewed runtime is downloaded
-automatically.
-
-#### Automated runtime preparation
-
-[wix/prepare-runtime.ps1](wix/prepare-runtime.ps1) automates runtime preparation
-using the checked-in [runtime manifest](wix/runtime-manifest.json). After a
-manifest has been completed and approved, CI downloads its pinned binary,
-license texts, source archives, and build materials; verifies every SHA-256;
-generates `THIRD-PARTY-NOTICES.txt` and `SOURCE.txt`; creates
-`hop-mpv-runtime.7z` and its checksum sidecar; and passes the prepared directory
-directly to cargo-wix. The prepared archive and manifest are also uploaded as
-the `hop-mpv-runtime` artifact.
-
-**The supplied manifest is intentionally unapproved and incomplete.** It pins
-the candidate zhongfly LGPL x64 binary, but does not invent its dependency
-inventory, licensing approval, or matching-source information. Until a reviewer
-completes that inventory, CI reports the pending review and skips MSI packaging.
-Normal Windows/Linux binary builds and offline runtime-preparation tests still
-run on every push.
-
-Complete these manifest fields for the exact binary being distributed:
-
-- `runtime`: name, HTTPS URL, SHA-256, extraction `root` (`"."` if no enclosing
-  directory), and an explicit `files` list containing `libmpv-2.dll` and all
-  additional runtime DLLs. Relative subdirectories are preserved.
-- `licenses`: one record per original license/notice file, with a unique plain
-  filename in `name`, an HTTPS `url`, and `sha256`. These files are downloaded
-  unchanged into `licenses\`.
-- `sources`: matching source archives and build-material records, each with
-  `name`, HTTPS `url`, `sha256`, and `purpose`. Include at least one `"source"`
-  record and one `"build"` record. Supply all applicable patches,
-  configurations, and build/reproduction instructions, not just a moving branch
-  URL. Files are included unchanged under `sources\`.
-- `components`: every reviewed dependency's `name`, exact `version` or commit,
-  `license` expression, and `licenses`/`sources` arrays referencing artifact
-  filenames above. Multiple components can reference a shared source/build
-  archive when it actually contains their matching materials. Every artifact
-  must be referenced.
-- `review`: set `reviewer`, an ISO `date` (`YYYY-MM-DD`), and `notes` explaining
-  the review. Set `approved` to `true` only after the inventory and
-  redistribution obligations have been reviewed.
-
-For example, each entry in `licenses` has this shape (replace the placeholders):
-
-```json
-{
-  "name": "mpv-COPYING.txt",
-  "url": "https://your-distribution.example/pinned-build/mpv-COPYING.txt",
-  "sha256": "<64-character SHA-256 of that exact file>"
-}
-```
-
-Source entries have the same shape plus `"purpose": "source"` or
-`"purpose": "build"`. A component references them by filename:
-
-```json
-{
-  "name": "mpv",
-  "version": "<exact revision>",
-  "license": "<reviewed license expression>",
-  "licenses": ["mpv-COPYING.txt"],
-  "sources": ["mpv-source.tar.xz", "runtime-build-materials.tar.xz"]
-}
-```
-
-Use durable download locations for all pinned files. The upstream candidate
-retains only 30 days of binary releases; mirror approved files with their
-original checksums before they disappear. Automated validation checks structure,
-references, hashes, and presence; it does not certify legal compliance or prove
-that a dependency inventory is complete.
-
-Local preparation requires PowerShell and 7-Zip:
-
-```powershell
-# Validate without downloading; an unapproved manifest reports Approved=False.
 .\wix\prepare-runtime.ps1 -ValidateOnly
+```
 
-# Use a fresh output directory. An unapproved/incomplete manifest fails.
+**Build:**
+```powershell
 $runtime = .\wix\prepare-runtime.ps1 -OutputDirectory '.\target\prepared-runtime'
 .\wix\build-installer.ps1 -RuntimeDirectory $runtime.RuntimeDirectory -WixBin 'C:\tools\wix314'
-
-# Offline fixture tests; no upstream downloads or actual licensing approval.
-.\wix\test-prepare-runtime.ps1
 ```
 
-The script refuses an existing output directory to prevent stale materials
-from entering a later bundle. The binary archive's unused files are not
-implicitly distributed: list all necessary DLLs and original license/notice
-materials explicitly in the manifest.
+### External Runtime Bundle
 
-#### Using an externally prepared bundle instead
+Alternatively, set GitHub Actions variables:
 
-The existing external-bundle mode remains available and takes precedence over
-the manifest. Set these **repository Actions variables** under GitHub
-**Settings → Secrets and variables → Actions → Variables**:
+- `HOP_MPV_BUNDLE_URL`: HTTPS URL to `.7z` runtime archive
+- `HOP_MPV_BUNDLE_SHA256`: 64-character SHA-256 digest
 
-- `HOP_MPV_BUNDLE_URL`: an HTTPS URL to the approved runtime `.7z` archive.
-- `HOP_MPV_BUNDLE_SHA256`: its 64-character SHA-256 digest.
-
-The workflow verifies the checksum before extracting with 7-Zip (preinstalled
-on the Windows runner) and uploads
-`hop-windows-x86_64-msi`. If the URL is unset, CI uses the reviewed-manifest
-mode described above; a missing/invalid external checksum fails packaging.
-For a local `.7z` archive, compute its digest with
-`Get-FileHash .\mpv-runtime.7z -Algorithm SHA256`.
-Changing the archive format does not waive the bundle requirements: an upstream
-libmpv archive must still include the required notices and source materials
-before it can be used by the installer.
-
-Uninstall through Windows Settings. The MSI records the selected installation
-directory under `HKCU\Software\Hop\Installer` and restores it for maintenance and
-uninstall, including custom locations. Uninstall removes MSI-managed application
-and runtime files, shortcuts, installer registry values, and empty installed
-directories. Files added separately are not deleted, so a folder containing
-unmanaged files may remain; the installer never recursively wipes a user-selected
-directory. User preview settings are preserved.
-This path-tracking fix applies to installations made with the updated MSI;
-previously installed packages retain their cached uninstall behavior. Increase
-the package version for a new installer release.
-If startup was enabled in Hop, disable it and Save before uninstalling; the
-installer deliberately leaves the current user's startup entry untouched.
-
-## Windows Explorer: Space to preview
-
+Compute SHA-256:
 ```powershell
-cargo run --release -- --watch
+Get-FileHash .\mpv-runtime.7z -Algorithm SHA256
 ```
 
-Running Hop without arguments on Windows also starts the watcher and adds an
-**Hop preview-window/spacebar** icon to the Windows notification area (possibly in the hidden-icons
-overflow). Leave it running, select a file in an Explorer file-list pane,
-and press **Space**.
-Only one tray watcher can run per Windows user, including when launched from
-different Hop copies or through sign-in startup. Starting another watcher exits
-without adding a second tray icon; terminal launches report that Hop is already
-running. Preview, Settings, and About windows still use their own processes.
-The watcher holds an exclusive handle to `%LOCALAPPDATA%\hop\watcher.lock`.
-Windows releases it automatically on exit or a crash; the empty lock file is
-retained and does not prevent restarting Hop.
+---
 
-The preview stays **always on top** and opens **without taking focus from Explorer**.
-Press **Space** or **Escape** in Explorer's file list or in the preview to close it.
-Clicking outside the preview window also closes it, including clicking a file
-in Explorer. Clicks inside the preview, its title bar, or playback controls
-keep it open. Dragging a video slider outside the window does not dismiss it
-unless you start a new click outside.
-Right-click the tray icon for:
+## Implementation Details
 
-- **Settings**: configure default video volume (0-100%) and controls auto-hide
-  delay (0.5-30 seconds), and optionally enable **Start Hop when I sign in to
-  Windows**. Save applies playback changes to previews opened afterward; reopen
-  an existing preview to use them. Startup changes are registered when you Save.
-- **About**: show Hop's version and a short description.
-- **Exit**: remove the tray icon, stop the watcher, and close the preview,
-  Settings, and About windows opened by that watcher.
+### Windows Explorer Integration
 
-The icon is restored if Windows Explorer restarts. Watcher errors are reported
-through tray notifications, with a message box if notification delivery fails.
-When launched from a terminal, **Ctrl+C** is also available to stop the watcher;
-use tray **Exit** to close its managed windows as well.
+- **COM Interface:** Shell.BrowserViewEvents
+- **Path Reading:** IShellFolderViewDual.SelectedItems
+- **Keyboard Monitoring:** Low-level Windows hooks (non-blocking)
+- **Navigation:** UI Automation for grid patterns and focus tracking
+- **Threading:** Dedicated STA worker for Explorer COM calls, separate MTA worker for layout queries
 
-Settings and About are also available as `hop --settings` and `hop --about`.
-Linux remains CLI-launched, without a tray watcher. Settings are stored as JSON
-in `%APPDATA%\hop\settings.json` on Windows and
-`$XDG_CONFIG_HOME/hop/settings.json` (or `~/.config/hop/settings.json`) on Linux.
-Missing settings use the existing defaults of 70% volume and a two-second
-auto-hide delay. Invalid settings produce an explicit error; open Settings to
-reset them, then Save. Saving replaces the file atomically.
+### Explorer Navigation Behavior
 
-Windows startup is opt-in and applies only to your Windows account. The checkbox
-reads the current `Hop` entry under
-`HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`, rather than
-duplicating that state in the JSON settings. Saving it checked registers the
-current executable with `--watch`, so Hop starts in the tray at your next sign-in.
-Saving it unchecked removes that entry but does not stop an already-running
-watcher. Cancel leaves startup unchanged. **Restore defaults** unchecks startup;
-Save is still required. Keep the executable at its current location, or reopen
-Settings from its new location and Save to update the startup command.
-Registration errors remain visible in Settings; startup-read errors offer Retry
-or **Disable startup on Save**. Linux startup integration is not included.
+- **Reconnection:** Hops automatically reconnects if the view is rebuilt
+- **View Switching:** Matched against focused shell view (tabs supported)
+- **Source Tracking:** Handles closing/hiding source tabs without forcing reconnection
+- **Grid Navigation:** Arrow keys move through visible items using UI Automation
+- **Limitations:** Desktop icons, file-open dialogs, and virtual items not supported
 
-- Keep using **Left**, **Right**, **Up**, or **Down** in Explorer to select files.
-  The same preview
-  window updates to the newly selected file, following Explorer's sort order
-  and list/grid layout. Holding an arrow key repeats navigation.
-- Use Explorer's keyboard selection to browse while keeping the preview open;
-  clicking Explorer now dismisses it. If you click the preview to focus it,
-  unmodified arrow keys there always move Explorer's selection, even after
-  clicking preview content, Play/Pause, or a playback slider. The background
-  Explorer selection and the preview stay synchronized without moving keyboard
-  focus away from the preview. Holding an arrow key continues updating both.
-  Navigation uses Explorer's displayed item order and live grid dimensions.
-  The file grid is located inside the originating folder view, independently of
-  which nested Explorer control last had keyboard focus. Missing automation
-  support is reported as an explicit navigation error.
-  The selected item is also focused and scrolled into view without activating
-  Explorer. In Details/Content views, Up/Down move between files; Left/Right
-  do not change the selected file.
-  Playback sliders remain usable with the mouse. Standalone previews retain
-  normal slider keyboard behavior because they are not linked to Explorer.
-- Space/Escape closing from Explorer applies only to the originating file list,
-  not search/address/rename fields or other applications.
-- Closing or hiding the source Explorer tab stops navigation and shows a
-  notification in the preview; the last preview remains open.
-- Entering a folder or navigating back within the same Explorer tab keeps the
-  preview connected to that tab and follows its new selection. Hop allows a
-  one-second transition while Explorer makes its replacement view visible;
-  a view that remains hidden stops navigation.
-- If Explorer rebuilds its folder view, Hop reconnects to the same visible
-  source tab instead of permanently disabling navigation. Persistent failures
-  remain visible and are retried with a short delay; warnings clear on recovery.
-  Pending arrow presses are discarded after a failure to avoid unexpected
-  movement later. Hop never reconnects to another tab or retries a selection
-  change whose outcome is uncertain.
-- Explorer selection reads, arrow navigation, reconnection, and shell-interface
-  cleanup run on a dedicated STA worker with its own message pump, outside
-  window callbacks. The preview exchanges only commands, paths, and status
-  messages with it; synchronous redraws and tray/menu messages cannot make
-  Explorer COM calls from the preview's GUI thread.
-  Folder-layout queries use a separate MTA worker. UI Automation objects stay
-  on that thread throughout their lifetime.
-- Only unmodified Space in an Explorer file-list control triggers a preview.
-  Search, address, and rename fields are excluded.
-- The first selected item is previewed when multiple items are selected.
-- Only one watcher runs per Windows user, with one managed preview at a time.
-- The watcher observes keys; it does not suppress Explorer's own Space behavior.
-- Explorer tabs are matched against the focused shell view. Desktop icons,
-  file-open dialogs, other file managers, and virtual shell items are not supported.
-- Failures are printed to the watcher's terminal; file-loading errors also appear
-  in the preview window.
-- No administrator permissions, shell modifications, or global hotkey
-  registration are needed. Windows sign-in startup is optional.
-- Outside-click detection observes mouse presses without blocking or consuming
-  them, so the destination application still receives its click. Merely moving
-  the mouse, scrolling, or keeping keyboard focus in Explorer does not dismiss
-  the preview.
-  The Windows mouse hook runs on a dedicated message-pump thread, so software
-  video rendering cannot hold up global mouse movement.
+### Cross-Platform Architecture
 
-## Direct preview: Windows and Linux
+- **GUI:** egui (immediate-mode UI) with eframe (window handling)
+- **Images:** `image` crate (PNG, JPEG, BMP, ICO, TIFF, WebP, PNM, TGA, QOI)
+- **GIF:** Native frame decoding and animation
+- **PDF:** Embedded Rust renderer (pdfium-render)
+- **Video:** libmpv (software rendering)
+- **Threading:** Dedicated workers for file loading, layout queries, and view synchronization
+- **Error Handling:** Graceful fallback to name-only display for inaccessible items
 
-```text
-cargo run --release -- --preview "path to a file"
-```
+### Known Limitations
 
-The installed binary accepts `hop <path>` or `hop --preview <path>`.
-Use `hop -- <path>` if a filename starts with `-`. Paths are passed directly,
-not interpreted by a shell. Close with Space, Escape, or the window close button.
-Standalone previews also stay on top, but take focus when opened.
-On Windows, standalone previews use the same outside-click dismissal.
-On Linux, previews close when they lose focus after initial activation (which
-also includes switching applications with the keyboard); Wayland does not
-permit arbitrary global mouse monitoring.
-On Linux, always-on-top behavior depends on the window manager/compositor.
-Explorer arrow navigation is available only for previews opened by the Windows
-watcher; standalone previews and the Linux CLI do not control a file manager.
+- **Synchronous COM calls:** Deferred to worker threads to avoid deadlocks
+- **UI Automation:** Limited to visible grid patterns; performance degrades with large file lists
+- **Wayland:** Always-on-top and mouse monitoring behavior is window-manager dependent
+- **Network files:** Quick Access shortcuts to deleted network paths fall back to name display
 
-**Linux integration in this version is CLI-only.** There is no automatic global
-Space listener on Linux. A file manager custom action can invoke `hop` with
-its selected local path; file-manager extensions and Wayland desktop shortcuts
-are intentionally outside this version's scope.
+---
 
-## Preview support and limits
+## License
 
-| Type | Behavior |
-| --- | --- |
-| Images | PNG, JPEG, BMP, ICO, TIFF/TIF (first page), WebP, PNM, TGA, QOI |
-| Animated GIF | Native Rust animation with frame timing and looping |
-| PDF | In-pane page navigation, fit-to-page, zoom, and scrolling; embedded Rust renderer, no separate runtime |
-| Video with audio | In-pane autoplay and looping using libmpv; MP4, MKV, WebM, MOV, AVI, WMV, MPEG, M4V, TS/MTS/M2TS, OGV, FLV, 3GP |
-| Text/source | UTF-8 text, up to 256 KiB, selectable read-only content |
-| Folders | Centered side-by-side group with a folder icon and name on the left and scrollable contents on the right; up to 200 entries sorted within the displayed subset |
-| Other files | Centered file-type icon with the file name underneath, followed by the human-readable file size |
+MIT
 
-The preview pane has a light grey background. The preview content uses the
-entire client area without a header, file details,
-dimensions, or keyboard hints. Images are centered and scaled to fit while
-preserving their aspect ratio. The native title bar and window controls remain.
-Text/source previews have 16-point padding on all sides, including while scrolling.
-While content loads, an animated loading spinner appears in the center of the pane.
-Loading errors and navigation failures are still displayed when needed;
-truncation notices are written to the terminal rather than occupying the pane.
+---
 
-Images are limited to 64 MiB on disk, dimensions of 16,384 pixels per axis, and a
-256 MiB decoder allocation budget. Still-image textures are reduced to at most
-4,096 pixels per axis. GIFs are bounded to 500 frames, 128 MiB of retained
-frame data, and 2,048 pixels per axis; exceeding a limit shows an explicit
-error rather than silently dropping frames. GIF delays below 20 ms are clamped.
-Images are decoded and converted to texture-ready pixels on a worker thread,
-which wakes the UI as soon as a preview result is ready. Texture upload remains
-on the UI thread. Unsupported files show only a centered
-file-type icon, file name, and size (B, KiB, MiB, etc.), without an unsupported-format
-message or extra metadata. Names below folder and file-type icons wrap to at most
-three lines; hover over the name to see it in full. Windows uses the registered
-shell file-type icon; Linux and unavailable Windows associations use a generic
-document icon with an extension
-badge. Icon lookup failures are logged to the terminal.
+## Contributing
 
-PDFs open on the first page. Use Previous/Next buttons, the page-number control, keyboard shortcuts (arrow keys, Page Up/Down, Home, End), or scroll wheel to
-navigate (scroll navigates pages in fit-to-page mode; when zoomed, scrolling at the page edge advances to the next or previous page, while scrolling in the middle scrolls the content). Fit page to fit the whole page, and the percentage control to zoom
-(25-300%); Ctrl+Scroll wheel also changes zoom. Enlarged pages scroll in both directions. Parsing and page rendering
-run on worker threads. PDFs are limited to 64 MiB on disk and page rasters to
-2,400 pixels per axis; only the current page is retained by the viewer.
-Password-protected PDFs requiring a password and invalid PDFs show an explicit
-error. The renderer does not execute embedded scripts or open document links;
-PDF forms, text selection, and password entry are not supported.
+Contributions are welcome! Please ensure:
+- Existing tests pass: `cargo test --locked`
+- Code is formatted: `cargo fmt`
+- No new warnings: `cargo clippy --locked`
 
-Office documents, archives, executables, standalone audio, and other known
-binary formats use this fallback even when the file happens to contain ASCII.
-Unknown binary/non-UTF-8 files and oversized images also use it. Plain-text
-files with unrecognized extensions can still be previewed as text.
-Missing/unreadable files and decoding errors in supported formats continue to
-show an explicit error rather than being disguised as an unsupported type.
+---
 
-## Video runtime
+## Support
 
-Video requires **libmpv client API 2** with the software render API (a current
-mpv build is recommended). Installing just `mpv.exe` is not sufficient.
-Image and GIF previews do not need libmpv.
-
-- **Windows (x64):** obtain `libmpv-2.dll` from a trusted libmpv development
-  build, such as the `mpv-dev-x86_64` archives in
-  [mpv-winbuild-cmake releases](https://github.com/shinchiro/mpv-winbuild-cmake/releases).
-  Place it beside the executable: `target\release\libmpv-2.dll` for a release
-  build, or `target\debug\libmpv-2.dll` for `cargo run`.
-- **Linux:** install the distribution's libmpv runtime package, for example
-  `sudo apt install libmpv2` on current Debian/Ubuntu, or the `mpv` package
-  on Arch Linux. The loader looks for `libmpv.so.2` or `libmpv.so`.
-- Alternatively, set **`HOP_MPV_LIBRARY`** to the full path of a trusted
-  library. This overrides automatic discovery and errors visibly if invalid.
-  Only load libraries from trusted sources; they execute native code.
-
-Videos autoplay with audio at the configured volume (70% by default) and loop
-until you close the preview or select another file. Navigating away destroys
-the player and stops audio.
-Video stays in the same always-on-top pane; it does not open an
-external player. Space/Escape and Explorer navigation retain their existing
-behavior. A compact, translucent control overlay appears **only for video**,
-centered along the bottom of the preview pane with a 12-point inset, without
-reducing the video area. It appears
-when a video opens or you move the mouse, and hides after the configured
-inactivity delay (two seconds by default). Clicking, using the keyboard, or
-scrolling reveals it again.
-Controls stay visible while a mouse button is held, so seeking and volume
-drags are not interrupted.
-
-- **Play / Pause** is an icon button centered in the control row: a play
-  triangle when paused and two pause bars while playing. Hover for its action
-  label. Clicking toggles playback without closing the preview.
-- **Timeline** shows elapsed/total time. Click to seek, or drag and release
-  to seek to a precise position. Unknown-duration/non-seekable media disables
-  the timeline until seeking is available.
-- **Volume** ranges from 0% (silent) to 100%, starting at the saved default
-  for each file.
-
-Controls follow the real player state. Seeking while paused keeps playback
-paused. Playback/seek/volume errors are shown without hiding the current frame.
-Images and GIFs retain their full-pane layout without playback controls.
-
-Codec support depends on the installed libmpv/FFmpeg build. Frames are rendered
-in software into an aspect-preserving surface capped at 1,920 x 1,080, then
-displayed in Hop's existing renderer. This works without native child-window
-embedding on Windows, X11, and Wayland, but is more CPU-intensive than
-hardware-accelerated playback. A missing/incompatible library, failed codec,
-or audio output error appears in the pane and terminal. Native mpv config
-files and user scripts are disabled.
-
-libmpv is loaded dynamically, not linked into Hop. If distributing a runtime
-alongside Hop, comply with that build's license and its bundled codecs.
-
-Hop reads files but never executes them or renders embedded scripts. Previews
-are snapshots, not live views. Network/cloud-backed paths may take longer to
-load or cause the operating system to download their contents. Errors decoding
-an otherwise supported image are shown explicitly rather than hidden.
-
-## Development
-
-The application logo combines a preview window, an H monogram, and a spacebar
-key. It is embedded in the Windows executable and tray and used by the preview,
-Settings, and About windows. No separate icon files are needed beside Hop.
-The editable source is [assets/hop.svg](assets/hop.svg); [assets/hop.png](assets/hop.png)
-is its transparent 512-pixel export. After updating the SVG, export it to that PNG
-at 512 x 512, then run `.\assets\generate-ico.ps1` on Windows to regenerate the
-multi-resolution [assets/hop.ico](assets/hop.ico) before building.
-
-```text
-cargo fmt --check
-cargo test
-cargo clippy --all-targets -- -D warnings
-```
-
-Tests cover argument handling, bounded text and directory previews, UTF-8
-boundaries, binary detection, image decoding, missing files, and image size
-limits. Explorer keyboard/focus behavior and Linux display-server behavior
-also need manual testing on the corresponding desktop.
-Navigation tests cover arrow filtering, source-handle validation, stale load
-results, error recovery, and preview reloads.
-Media tests cover PNG/BMP/TIFF decoding, GIF frame timing/colors/looping and
-memory limits, texture updates, and bounded video render sizes.
-
-A separate integration test requires a local video **with an audio track**
-and an installed libmpv runtime. In PowerShell:
-
-```powershell
-$env:HOP_MPV_LIBRARY = 'G:\path\to\libmpv-2.dll'
-$env:HOP_TEST_VIDEO = 'G:\path\to\sample.mp4'
-cargo test media::tests::decodes_real_video_and_releases_player -- --ignored
-cargo test ui::tests::navigating_away_releases_active_video_and_audio -- --ignored
-```
-
-These check changing decoded frames, active audio output, play/pause, seeking,
-volume, releasing/reopening the player, and stopping playback on navigation.
-Normal `cargo test` skips
-these environment-dependent tests.
-
-On an interactive Windows desktop, this separate Explorer regression test
-opens its own temporary folder window, checks same-tab folder transitions,
-selection tracking, stale-navigation cleanup, and hidden-view handling, then
-closes that window:
-
-```text
-cargo test entering_folder_tracks_the_same_tab_and_releases_stale_navigation -- --ignored
-```
+For issues, feature requests, or questions, please open a GitHub issue.

@@ -21,6 +21,8 @@ use std::path::PathBuf;
 
 enum Command {
     Preview(PathBuf),
+    ExplorerPreview { path: PathBuf, name: String },
+    SourceName(String),
     Watch,
     Settings,
     About,
@@ -44,6 +46,22 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, Strin
         Command::Settings
     } else if first == "--about" {
         Command::About
+    } else if first == "--explorer-preview" {
+        Command::ExplorerPreview {
+            path: PathBuf::from(args.next().ok_or("Expected a file path.")?),
+            name: args
+                .next()
+                .ok_or("Expected a source name.")?
+                .into_string()
+                .map_err(|_| "The source name is not valid Unicode.")?,
+        }
+    } else if first == "--source-name" {
+        Command::SourceName(
+            args.next()
+                .ok_or("Expected a source name.")?
+                .into_string()
+                .map_err(|_| "The source name is not valid Unicode.")?,
+        )
     } else if first == "--preview" || first == "--" {
         Command::Preview(PathBuf::from(args.next().ok_or("Expected a file path.")?))
     } else if first.to_string_lossy().starts_with('-') {
@@ -73,6 +91,10 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         Command::Preview(path) => ui::show(path),
+        Command::ExplorerPreview { path, name } => {
+            ui::show(preview::Source::Explorer { path, name })
+        }
+        Command::SourceName(name) => ui::show(preview::Source::Name(name)),
         Command::Settings => ui::show_settings(),
         Command::About => ui::show_about(),
         Command::Watch => {
@@ -140,6 +162,11 @@ mod tests {
     fn rejects_missing_paths_unknown_options_and_extra_arguments() {
         for args in [
             vec!["--preview"],
+            vec!["--source-name"],
+            vec!["--source-name", "one", "two"],
+            vec!["--explorer-preview"],
+            vec!["--explorer-preview", "path"],
+            vec!["--explorer-preview", "path", "name", "extra"],
             vec!["--"],
             vec!["--unknown"],
             vec!["one", "two"],
@@ -148,6 +175,32 @@ mod tests {
             vec!["--about", "extra"],
         ] {
             assert!(parse(&args).is_err());
+        }
+    }
+
+    #[test]
+    fn explorer_preview_preserves_the_path_and_display_name() {
+        let path = r"C:\Missing folder\file.txt";
+        let name = "Quick Access display name";
+        assert!(matches!(
+            parse(&["--explorer-preview", path, name]),
+            Ok(Command::ExplorerPreview { path: parsed, name: display_name })
+                if parsed == PathBuf::from(path) && display_name == name
+        ));
+    }
+
+    #[test]
+    fn accepts_source_names_without_treating_them_as_paths_or_options() {
+        for name in [
+            "This PC",
+            "::{shell-item}",
+            "-source",
+            "Phone\\Documents",
+            "\u{6587}\u{4ef6}",
+        ] {
+            assert!(
+                matches!(parse(&["--source-name", name]), Ok(Command::SourceName(parsed)) if parsed == name)
+            );
         }
     }
 }

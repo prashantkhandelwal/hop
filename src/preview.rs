@@ -1,7 +1,7 @@
 use image::{AnimationDecoder, ImageDecoder};
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub const TEXT_LIMIT: usize = 256 * 1024;
@@ -21,7 +21,43 @@ pub struct Preview {
     pub content: Content,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum Source {
+    Path(PathBuf),
+    Explorer { path: PathBuf, name: String },
+    Name(String),
+}
+
+impl From<PathBuf> for Source {
+    fn from(path: PathBuf) -> Self {
+        Self::Path(path)
+    }
+}
+
+impl Source {
+    pub fn title(&self) -> std::borrow::Cow<'_, str> {
+        match self {
+            Self::Path(path) | Self::Explorer { path, .. } => path
+                .file_name()
+                .unwrap_or(path.as_os_str())
+                .to_string_lossy(),
+            Self::Name(name) => name.into(),
+        }
+    }
+
+    pub fn load(&self) -> Result<Preview, String> {
+        match self {
+            Self::Path(path) => load(path),
+            Self::Explorer { path, name } => load_path(path, Some(name)),
+            Self::Name(name) => Ok(Preview {
+                content: Content::Name(name.clone()),
+            }),
+        }
+    }
+}
+
 pub enum Content {
+    Name(String),
     Pdf(Box<crate::pdf::PdfPreview>),
     Animation(Vec<AnimationFrame>),
     Video,
@@ -45,7 +81,26 @@ pub enum Content {
 }
 
 pub fn load(path: &Path) -> Result<Preview, String> {
-    let metadata = fs::metadata(path).map_err(|error| format!("Cannot inspect file: {error}"))?;
+    load_path(path, None)
+}
+
+fn load_path(path: &Path, missing_name: Option<&str>) -> Result<Preview, String> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            if error.kind() == std::io::ErrorKind::NotFound
+                && let Some(name) = missing_name
+            {
+                return Ok(Preview {
+                    content: Content::Name(name.into()),
+                });
+            }
+            return Err(format!(
+                "Cannot inspect file: {error} (file: {})",
+                path.display()
+            ));
+        }
+    };
     let content = if metadata.is_dir() {
         load_directory(path)?
     } else if !metadata.is_file() {
@@ -399,7 +454,54 @@ mod tests {
         assert!(
             matches!(preview.content, Content::Text { text, truncated: false } if text == "Hello\nworld")
         );
-        assert!(load(&dir.0.join("missing")).is_err());
+        let missing = dir.0.join("missing file.txt");
+        let Err(error) = load(&missing) else {
+            panic!("Expected an error for a missing file");
+        };
+        let cause = fs::metadata(&missing).unwrap_err();
+        assert_eq!(
+            error,
+            format!("Cannot inspect file: {cause} (file: {})", missing.display())
+        );
+    }
+
+    #[test]
+    fn explorer_sources_use_names_for_missing_files_and_folders_only() {
+        let dir = TestDirectory::new();
+        for is_folder in [false, true] {
+            let path = dir.0.join(if is_folder { "folder" } else { "file.txt" });
+            let source = Source::Explorer {
+                path: path.clone(),
+                name: "Quick Access display name".into(),
+            };
+            if is_folder {
+                fs::create_dir(&path).unwrap();
+                assert!(matches!(
+                    source.load().unwrap().content,
+                    Content::Directory { .. }
+                ));
+                fs::remove_dir(&path).unwrap();
+            } else {
+                fs::write(&path, "hello").unwrap();
+                assert!(matches!(
+                    source.load().unwrap().content,
+                    Content::Text { .. }
+                ));
+                fs::remove_file(&path).unwrap();
+            }
+            assert!(matches!(source.load().unwrap().content,
+                Content::Name(name) if name == "Quick Access display name"));
+        }
+        let corrupt = dir.0.join("corrupt.png");
+        fs::write(&corrupt, "not an image").unwrap();
+        assert!(
+            Source::Explorer {
+                path: corrupt,
+                name: "Corrupt image".into()
+            }
+            .load()
+            .is_err()
+        );
     }
 
     #[test]

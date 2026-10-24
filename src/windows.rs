@@ -256,14 +256,22 @@ fn selected_view(
     Ok(None)
 }
 
-fn selected_path(document: &IShellFolderViewDual) -> windows::core::Result<Option<PathBuf>> {
+fn selected_source(
+    document: &IShellFolderViewDual,
+) -> windows::core::Result<Option<crate::preview::Source>> {
     unsafe {
         let selected = document.SelectedItems()?;
         if selected.Count()? == 0 {
             return Ok(None);
         }
-        let path = selected.Item(&VARIANT::from(0))?.Path()?;
-        Ok(Some(PathBuf::from(OsString::from_wide(&path))))
+        let item = selected.Item(&VARIANT::from(0))?;
+        let path = PathBuf::from(OsString::from_wide(&item.Path()?));
+        let name = item.Name()?.to_string();
+        Ok(Some(if path.is_absolute() {
+            crate::preview::Source::Explorer { path, name }
+        } else {
+            crate::preview::Source::Name(name)
+        }))
     }
 }
 
@@ -413,10 +421,10 @@ enum NavigationTarget {
 #[derive(Debug, PartialEq)]
 enum ConnectionPoll {
     Pending,
-    Selection(Option<PathBuf>),
+    Selection(Option<crate::preview::Source>),
 }
 
-type ExplorerResult = Result<Option<PathBuf>, String>;
+type ExplorerResult = Result<Option<crate::preview::Source>, String>;
 
 enum ExplorerUpdate {
     State {
@@ -999,11 +1007,8 @@ impl ExplorerConnection {
         }
         self.next_poll = Instant::now() + Duration::from_millis(32);
         let path = self
-            .with_reconnect(|navigator| selected_path(&navigator.document))
+            .with_reconnect(|navigator| selected_source(&navigator.document))
             .map_err(|error| format!("Cannot read Explorer selection: {error}"))?;
-        if path.as_ref().is_some_and(|path| !path.is_absolute()) {
-            return Err("The selected Explorer item is not a local filesystem path.".into());
-        }
         Ok(ConnectionPoll::Selection(path))
     }
 }
@@ -1049,19 +1054,22 @@ fn launch_preview(shell: &IShellWindows) -> Result<Option<Child>, String> {
     else {
         return Ok(None);
     };
-    let Some(path) = selected_path(&document).map_err(|error| error.to_string())? else {
+    let Some(path) = selected_source(&document).map_err(|error| error.to_string())? else {
         return Ok(None);
     };
     if unsafe { GetForegroundWindow() } != foreground {
         return Ok(None);
     }
-    if !path.is_absolute() {
-        return Err("The selected Explorer item is not a local filesystem path.".into());
-    }
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    Command::new(executable)
-        .arg("--preview")
-        .arg(path)
+    let mut command = Command::new(executable);
+    match path {
+        crate::preview::Source::Path(path) => command.arg("--preview").arg(path),
+        crate::preview::Source::Explorer { path, name } => {
+            command.arg("--explorer-preview").arg(path).arg(name)
+        }
+        crate::preview::Source::Name(name) => command.arg("--source-name").arg(name),
+    };
+    command
         .env(
             SOURCE_ENV,
             format!("{}:{}", foreground.0 as usize, focus.0 as usize),
@@ -1286,7 +1294,7 @@ mod tests {
             assert!(navigator.navigate(Direction::Down).is_err());
             assert!(matches!(requests.try_recv(), Err(TryRecvError::Empty)));
         }
-        let path = PathBuf::from(r"C:\fixture\02.txt");
+        let path = crate::preview::Source::Path(PathBuf::from(r"C:\fixture\02.txt"));
         updates
             .send(ExplorerUpdate::State {
                 result: Ok(Some(path.clone())),
@@ -1349,7 +1357,8 @@ mod tests {
                 let probe = &mut *(GetWindowLongPtrW(window, GWLP_USERDATA) as *mut SyncProbe);
                 probe.flags = InSendMessageEx(None);
                 if let Some(document) = &probe.baseline {
-                    probe.baseline_error = selected_path(document).err().map(|error| error.code());
+                    probe.baseline_error =
+                        selected_source(document).err().map(|error| error.code());
                 }
                 probe.navigation = Some(probe.navigator.navigate(Direction::Down));
                 probe.selection = Some(probe.navigator.poll());
@@ -1497,7 +1506,7 @@ mod tests {
         loop {
             let path = probe.navigator.poll().unwrap();
             if unsafe { connection.view.GetFocusedItem() }.unwrap() == current + 1
-                && path == selected_path(&connection.document).unwrap()
+                && path == selected_source(&connection.document).unwrap()
             {
                 break;
             }
@@ -1676,10 +1685,11 @@ mod tests {
             }
             .unwrap();
             navigator.next_poll = Instant::now();
-            assert_eq!(
+            assert!(matches!(
                 navigator.poll().unwrap(),
-                ConnectionPoll::Selection(Some(selected.to_owned()))
-            );
+                ConnectionPoll::Selection(Some(crate::preview::Source::Explorer { path, .. }))
+                    if path == selected
+            ));
             navigator.navigate(Direction::Down).unwrap();
             navigator.next_poll = Instant::now();
             assert!(navigator.poll().is_ok());
@@ -1706,7 +1716,7 @@ mod tests {
         use windows::Win32::Foundation::{CO_E_OBJNOTCONNECTED, E_ACCESSDENIED};
         let mut navigator = ExplorerConnection::from_environment().unwrap().unwrap();
         let source = navigator.source_view;
-        let expected = selected_path(&navigator.document).unwrap();
+        let expected = selected_source(&navigator.document).unwrap();
         let mut calls = 0;
         let path = navigator
             .with_reconnect(|navigator| {
@@ -1714,7 +1724,7 @@ mod tests {
                 if calls == 1 {
                     return Err(windows::core::Error::from_hresult(CO_E_OBJNOTCONNECTED));
                 }
-                selected_path(&navigator.document)
+                selected_source(&navigator.document)
             })
             .unwrap();
         assert_eq!(calls, 2);
@@ -1744,7 +1754,7 @@ mod tests {
     #[ignore = "requires HOP_EXPLORER_SOURCE pointing to a test-owned visible Explorer view"]
     fn connected_explorer_pauses_without_extending_backoff_or_replaying_failed_input() {
         let mut navigator = ExplorerConnection::from_environment().unwrap().unwrap();
-        let expected = selected_path(&navigator.document).unwrap();
+        let expected = selected_source(&navigator.document).unwrap();
         navigator.navigate(Direction::Down).unwrap();
         assert_eq!(navigator.directions.len(), 1);
         let failure = "Explorer is temporarily disconnected.";

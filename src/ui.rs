@@ -1,10 +1,11 @@
-use crate::preview::{self, Content, Preview};
+use crate::preview::{self, Content, Preview, Source};
 use eframe::egui;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
-pub fn show(path: PathBuf) -> Result<(), String> {
+pub fn show(source: impl Into<Source>) -> Result<(), String> {
+    let source = source.into();
     let settings = crate::settings::Settings::load()?;
     #[cfg(windows)]
     let navigator = crate::windows::ExplorerNavigator::from_environment()?;
@@ -12,12 +13,7 @@ pub fn show(path: PathBuf) -> Result<(), String> {
     let activate = navigator.is_none();
     #[cfg(not(windows))]
     let activate = true;
-    let title = format!(
-        "Hop - {}",
-        path.file_name()
-            .unwrap_or(path.as_os_str())
-            .to_string_lossy()
-    );
+    let title = format!("Hop - {}", source.title());
     let options = eframe::NativeOptions {
         viewport: preview_viewport(activate).with_icon(crate::app_icon::load()?),
         ..Default::default()
@@ -28,7 +24,7 @@ pub fn show(path: PathBuf) -> Result<(), String> {
         Box::new(move |cc| {
             #[cfg(windows)]
             let outside_clicks = Some(crate::windows::OutsideClickMonitor::new(cc)?);
-            let app = PreviewApp::new(path, settings, &cc.egui_ctx);
+            let app = PreviewApp::new(source, settings, &cc.egui_ctx);
             #[cfg(windows)]
             let app = PreviewApp {
                 navigator,
@@ -64,17 +60,56 @@ pub fn show_settings() -> Result<(), String> {
     eframe::run_simple_native(
         "Hop - Settings",
         eframe::NativeOptions {
+            centered: true,
             viewport: egui::ViewportBuilder::default()
                 .with_icon(crate::app_icon::load()?)
                 .with_inner_size([480.0, 300.0])
-                .with_min_inner_size([440.0, 300.0]),
+                .with_minimize_button(false)
+                .with_maximize_button(false)
+                .with_resizable(false),
             ..Default::default()
         },
         move |ctx, _frame| {
+            #[cfg(windows)]
+            let can_save = pending.is_ok() && startup.is_ok();
+            #[cfg(not(windows))]
+            let can_save = pending.is_ok();
+            let [save, cancel, restore] = show_settings_actions(ctx, can_save);
+            if save.clicked() {
+                let result = (|| {
+                    pending.as_ref().map_err(|error| error.clone())?.save()?;
+                    #[cfg(windows)]
+                    crate::startup::set_enabled(
+                        *startup.as_ref().map_err(|error| error.clone())?,
+                    )
+                    .map_err(|error| format!(
+                        "Playback settings were saved, but startup could not be updated: {error}"
+                    ))?;
+                    Ok::<(), String>(())
+                })();
+                match result {
+                    Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                    Err(error) => {
+                        eprintln!("Hop: {error}");
+                        save_error = Some(error);
+                    }
+                }
+            }
+            if cancel.clicked() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            if restore.clicked() {
+                pending = Ok(crate::settings::Settings::default());
+                #[cfg(windows)]
+                {
+                    startup = Ok(false);
+                }
+                save_error = None;
+            }
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.heading("Settings");
                 ui.add_space(12.0);
-                match &mut pending {
+                egui::ScrollArea::vertical().show(ui, |ui| match &mut pending {
                     Ok(settings) => {
                         ui.add(
                             egui::Slider::new(&mut settings.default_volume, 0.0..=100.0)
@@ -82,6 +117,7 @@ pub fn show_settings() -> Result<(), String> {
                                 .suffix("%")
                                 .integer(),
                         );
+                        ui.add_space(12.0);
                         ui.add(
                             egui::Slider::new(&mut settings.controls_hide_delay, 0.5..=30.0)
                                 .text("Controls auto-hide delay")
@@ -89,66 +125,47 @@ pub fn show_settings() -> Result<(), String> {
                                 .step_by(0.5),
                         );
                         #[cfg(windows)]
-                        show_startup_setting(ui, &mut startup);
-                        ui.add_space(8.0);
+                        {
+                            ui.add_space(12.0);
+                            show_startup_setting(ui, &mut startup);
+                        }
+                        ui.add_space(84.0);
                         ui.label("Playback changes apply when you reopen the preview.");
                         if let Some(error) = &save_error {
                             ui.colored_label(ui.visuals().error_fg_color, error);
                         }
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            #[cfg(windows)]
-                            let can_save = startup.is_ok();
-                            #[cfg(not(windows))]
-                            let can_save = true;
-                            if ui.add_enabled(can_save, egui::Button::new("Save")).clicked() {
-                                let result = (|| {
-                                    settings.save()?;
-                                    #[cfg(windows)]
-                                    crate::startup::set_enabled(
-                                        *startup.as_ref().map_err(|error| error.clone())?,
-                                    )
-                                    .map_err(|error| format!(
-                                        "Playback settings were saved, but startup could not be updated: {error}"
-                                    ))?;
-                                    Ok::<(), String>(())
-                                })();
-                                match result {
-                                    Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                                    Err(error) => {
-                                        eprintln!("Hop: {error}");
-                                        save_error = Some(error);
-                                    }
-                                }
-                            }
-                            if ui.button("Cancel").clicked() {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                            }
-                            if ui.button("Restore defaults").clicked() {
-                                *settings = crate::settings::Settings::default();
-                                #[cfg(windows)]
-                                {
-                                    startup = Ok(false);
-                                }
-                                save_error = None;
-                            }
-                        });
                     }
                     Err(error) => {
                         ui.colored_label(ui.visuals().error_fg_color, error);
-                        if ui.button("Reset to defaults").clicked() {
-                            pending = Ok(crate::settings::Settings::default());
-                            #[cfg(windows)]
-                            {
-                                startup = Ok(false);
-                            }
-                        }
                     }
-                }
+                });
             });
         },
     )
     .map_err(|error| format!("Cannot open settings: {error}"))
+}
+
+fn show_settings_actions(ctx: &egui::Context, can_save: bool) -> [egui::Response; 3] {
+    egui::TopBottomPanel::bottom("settings-actions")
+        .resizable(false)
+        .exact_height(60.0)
+        .frame(egui::Frame::side_top_panel(&ctx.style()).inner_margin(12.0))
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                let buttons_width = 96.0 + 96.0 + 140.0 + 2.0 * ui.spacing().item_spacing.x;
+                ui.add_space(((ui.available_width() - buttons_width) / 2.0).max(0.0));
+                [
+                    ui.add_enabled(
+                        can_save,
+                        egui::Button::new("Save").min_size(egui::vec2(96.0, 36.0)),
+                    ),
+                    ui.add(egui::Button::new("Cancel").min_size(egui::vec2(96.0, 36.0))),
+                    ui.add(egui::Button::new("Restore defaults").min_size(egui::vec2(140.0, 36.0))),
+                ]
+            })
+            .inner
+        })
+        .inner
 }
 
 #[cfg(windows)]
@@ -174,37 +191,65 @@ fn show_startup_setting(ui: &mut egui::Ui, startup: &mut Result<bool, String>) {
 }
 
 pub fn show_about() -> Result<(), String> {
+    let icon = crate::app_icon::load()?;
+    let image = egui::ColorImage::from_rgba_unmultiplied(
+        [icon.width as usize, icon.height as usize],
+        &icon.rgba,
+    );
+    let mut texture = None;
     eframe::run_simple_native(
         "Hop - About",
         eframe::NativeOptions {
+            centered: true,
             viewport: egui::ViewportBuilder::default()
-                .with_icon(crate::app_icon::load()?)
-                .with_inner_size([360.0, 200.0])
+                .with_icon(icon)
+                .with_inner_size([400.0, 320.0])
+                .with_minimize_button(false)
+                .with_maximize_button(false)
                 .with_resizable(false),
             ..Default::default()
         },
-        |ctx, _frame| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.heading("Hop");
-                ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-                ui.add_space(12.0);
-                ui.label("Quick file previews for Windows and Linux.");
-                ui.label("Images, GIFs, PDFs, video, text, folders, and file metadata.");
-                ui.add_space(12.0);
-                if ui.button("Close").clicked() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
+        move |ctx, _frame| {
+            let texture = texture.get_or_insert_with(|| {
+                ctx.load_texture(
+                    "about-app-icon",
+                    image.clone(),
+                    egui::TextureOptions::LINEAR,
+                )
             });
+            show_about_panel(ctx, texture);
         },
     )
     .map_err(|error| format!("Cannot open About: {error}"))
 }
 
+fn show_about_panel(ctx: &egui::Context, texture: &egui::TextureHandle) {
+    egui::CentralPanel::default().show(ctx, |ui| {
+        ui.vertical_centered(|ui| {
+            ui.add_space(12.0);
+            ui.image((texture.id(), egui::vec2(96.0, 96.0)));
+            ui.add_space(8.0);
+            ui.heading("Hop");
+            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("A quick peek. A smoother workflow.").strong());
+            ui.add_space(8.0);
+            ui.label("Quick file previews for Windows and Linux.");
+            ui.label("Images, GIFs, PDFs, video, text.");
+            ui.add_space(12.0);
+            if ui.button("Close").clicked() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        });
+    });
+}
+
 struct PreviewApp {
     settings: crate::settings::Settings,
     path: PathBuf,
-    requests: Sender<PathBuf>,
-    receiver: Receiver<(PathBuf, Result<Preview, String>)>,
+    source: Source,
+    requests: Sender<Source>,
+    receiver: Receiver<(Source, Result<Preview, String>)>,
     loading: bool,
     preview: Option<Preview>,
     error: Option<String>,
@@ -295,15 +340,20 @@ fn take_navigation_keys(ctx: &egui::Context) -> Vec<egui::Key> {
 }
 
 impl PreviewApp {
-    fn new(path: PathBuf, settings: crate::settings::Settings, ctx: &egui::Context) -> Self {
+    fn new(
+        source: impl Into<Source>,
+        settings: crate::settings::Settings,
+        ctx: &egui::Context,
+    ) -> Self {
+        let source = source.into();
         let (sender, receiver) = mpsc::sync_channel(1);
-        let (requests, pending) = mpsc::channel::<PathBuf>();
+        let (requests, pending) = mpsc::channel::<Source>();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             while let Ok(next) = pending.recv() {
                 // Serialize decoding and skip intermediate requests during rapid navigation.
                 let path = pending.try_iter().last().unwrap_or(next);
-                let result = preview::load(&path);
+                let result = path.load();
                 if sender.send((path, result)).is_err() {
                     break;
                 }
@@ -312,7 +362,8 @@ impl PreviewApp {
         });
         let mut app = Self {
             settings,
-            path: path.clone(),
+            path: PathBuf::new(),
+            source: source.clone(),
             requests,
             receiver,
             loading: true,
@@ -335,12 +386,21 @@ impl PreviewApp {
             #[cfg(windows)]
             navigation_error: None,
         };
-        app.request_path(path);
+        app.request_source(source);
         app
     }
 
+    #[cfg(test)]
     fn request_path(&mut self, path: PathBuf) {
-        self.path = path;
+        self.request_source(Source::Path(path));
+    }
+
+    fn request_source(&mut self, source: Source) {
+        self.path = match &source {
+            Source::Path(path) | Source::Explorer { path, .. } => path.clone(),
+            Source::Name(_) => PathBuf::new(),
+        };
+        self.source = source;
         self.preview = None;
         self.error = None;
         self.texture = None;
@@ -351,7 +411,7 @@ impl PreviewApp {
         self.control_error = None;
         self.controls_last_activity = None;
         self.loading = true;
-        if let Err(error) = self.requests.send(self.path.clone()) {
+        if let Err(error) = self.requests.send(self.source.clone()) {
             let error = format!("Cannot request file preview: {error}");
             eprintln!("Hop: {error}");
             self.error = Some(error);
@@ -360,14 +420,11 @@ impl PreviewApp {
     }
 
     #[cfg(any(windows, test))]
-    fn load_path(&mut self, path: PathBuf, ctx: &egui::Context) {
-        self.request_path(path);
+    fn load_path(&mut self, source: impl Into<Source>, ctx: &egui::Context) {
+        self.request_source(source.into());
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
             "Hop - {}",
-            self.path
-                .file_name()
-                .unwrap_or(self.path.as_os_str())
-                .to_string_lossy()
+            self.source.title()
         )));
         ctx.request_repaint();
     }
@@ -399,7 +456,7 @@ impl PreviewApp {
             Ok(path) => {
                 self.navigation_error = None;
                 if let Some(path) = path
-                    && path != self.path
+                    && path != self.source
                 {
                     self.load_path(path, ctx);
                 }
@@ -425,7 +482,7 @@ impl PreviewApp {
                 Err(TryRecvError::Disconnected) => {
                     if self.loading {
                         self.accept_result(
-                            self.path.clone(),
+                            self.source.clone(),
                             Err("Preview worker stopped unexpectedly.".into()),
                             ctx,
                         );
@@ -441,11 +498,11 @@ impl PreviewApp {
 
     fn accept_result(
         &mut self,
-        path: PathBuf,
+        source: impl Into<Source>,
         result: Result<Preview, String>,
         ctx: &egui::Context,
     ) {
-        if path != self.path {
+        if source.into() != self.source {
             return;
         }
         self.loading = false;
@@ -821,10 +878,6 @@ impl PreviewApp {
             .frame(egui::Frame::NONE.fill(egui::Color32::from_gray(240)))
             .show(ctx, |ui| {
                 *ui.visuals_mut() = egui::Visuals::light();
-                #[cfg(windows)]
-                if let Some(error) = &self.navigation_error {
-                    ui.colored_label(ui.visuals().warn_fg_color, error);
-                }
                 if let Some(error) = &self.error {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                     return;
@@ -841,6 +894,11 @@ impl PreviewApp {
                     return;
                 };
                 match &mut preview.content {
+                    Content::Name(name) => {
+                        ui.centered_and_justified(|ui| {
+                            ui.heading(name.as_str());
+                        });
+                    }
                     Content::Pdf(pdf) => pdf.show(ui),
                     Content::Image { .. } | Content::Animation(_) | Content::Video => {
                         if let Some(texture) = &self.texture {
@@ -1075,6 +1133,103 @@ fn file_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_actions_are_large_bottom_aligned_and_keep_save_gated() {
+        let ctx = egui::Context::default();
+        let pane = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 300.0));
+        for can_save in [true, false] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(pane),
+                    ..Default::default()
+                },
+                |ctx| {
+                    let buttons = show_settings_actions(ctx, can_save);
+                    assert_eq!(buttons[0].enabled(), can_save);
+                    for (index, button) in buttons.iter().enumerate() {
+                        assert!(button.enabled() || index == 0);
+                        assert!(button.rect.width() >= 96.0);
+                        assert!(button.rect.height() >= 36.0);
+                        assert!(pane.contains_rect(button.rect));
+                        assert!((pane.bottom() - button.rect.bottom() - 12.0).abs() < 1.0);
+                    }
+                    assert!(buttons[2].rect.width() >= 140.0);
+                    let row = buttons[0].rect.union(buttons[2].rect);
+                    assert!((row.center().x - pane.center().x).abs() < 1.0);
+                    for pair in buttons.windows(2) {
+                        assert!(pair[0].rect.right() < pair[1].rect.left());
+                    }
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        assert!(ui.max_rect().bottom() <= buttons[0].rect.top());
+                    });
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn about_panel_centers_icon_and_shows_version_and_tagline() {
+        let ctx = egui::Context::default();
+        let icon = crate::app_icon::load().unwrap();
+        let texture = ctx.load_texture(
+            "about-test-icon",
+            egui::ColorImage::from_rgba_unmultiplied(
+                [icon.width as usize, icon.height as usize],
+                &icon.rgba,
+            ),
+            egui::TextureOptions::LINEAR,
+        );
+        let pane = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 320.0));
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(pane),
+                ..Default::default()
+            },
+            |ctx| show_about_panel(ctx, &texture),
+        );
+        let icon_rect = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect)
+                    if rect
+                        .brush
+                        .as_ref()
+                        .is_some_and(|brush| brush.fill_texture_id == texture.id()) =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("Expected application icon");
+        assert_eq!(icon_rect.size(), egui::vec2(96.0, 96.0));
+        assert!((icon_rect.center().x - pane.center().x).abs() < 1.0);
+        for expected in [
+            "Hop",
+            concat!("Version ", env!("CARGO_PKG_VERSION")),
+            "A quick peek. A smoother workflow.",
+            "Close",
+        ] {
+            let text = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == expected => Some(text),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("Expected About text: {expected}"));
+            let rect = text.galley.rect.translate(text.pos.to_vec2());
+            assert!(
+                pane.contains_rect(rect),
+                "{expected} must fit in the window"
+            );
+            assert!(
+                (rect.center().x - pane.center().x).abs() < 1.0,
+                "{expected} must be centered: {rect:?}"
+            );
+        }
+    }
 
     #[cfg(windows)]
     #[test]
@@ -1797,13 +1952,14 @@ mod tests {
             })
     }
 
-    fn app_with_requests(path: &str) -> (PreviewApp, Receiver<PathBuf>) {
+    fn app_with_requests(path: &str) -> (PreviewApp, Receiver<Source>) {
         let (requests, pending) = mpsc::channel();
         let (_sender, receiver) = mpsc::channel();
         (
             PreviewApp {
                 settings: crate::settings::Settings::default(),
                 path: PathBuf::from(path),
+                source: Source::Path(PathBuf::from(path)),
                 requests,
                 receiver,
                 loading: false,
@@ -2312,6 +2468,132 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn explorer_errors_do_not_overlay_preview_content() {
+        for content in [Content::Name("Phone".into()), text_preview().content] {
+            let ctx = egui::Context::default();
+            let (mut app, _pending) = app_with_requests("source");
+            app.preview = Some(Preview { content });
+            app.navigation_error = Some("Cannot read Explorer selection".into());
+            let output = ctx.run(Default::default(), |ctx| app.show_content(ctx));
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(labels.len(), 1);
+            assert!(matches!(labels[0], "Phone" | "hello"));
+            assert!(app.navigation_error.is_some());
+        }
+    }
+
+    #[test]
+    fn missing_explorer_targets_show_only_their_name_on_open_and_navigation() {
+        let ctx = egui::Context::default();
+        let directory = tempfile::tempdir().unwrap();
+        let first = Source::Explorer {
+            path: directory.path().join("deleted folder").join("missing.txt"),
+            name: "Pinned file".into(),
+        };
+        let mut app = PreviewApp::new(first, crate::settings::Settings::default(), &ctx);
+        for name in ["Pinned file", "Pinned folder"] {
+            if name == "Pinned folder" {
+                app.load_path(
+                    Source::Explorer {
+                        path: directory.path().join("missing folder"),
+                        name: name.into(),
+                    },
+                    &ctx,
+                );
+            }
+            let (source, result) = app.receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+            app.accept_result(source, result, &ctx);
+            assert!(!app.loading);
+            assert!(app.error.is_none());
+            assert!(matches!(&app.preview.as_ref().unwrap().content,
+                Content::Name(display_name) if display_name == name));
+            let output = ctx.run(Default::default(), |ctx| app.show_content(ctx));
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(labels, vec![name]);
+        }
+    }
+
+    #[test]
+    fn source_names_render_without_file_access_and_navigation_recovers() {
+        let ctx = egui::Context::default();
+        let name = "Phone\\Documents \u{6587}\u{4ef6}";
+        let source = Source::Name(name.into());
+        let mut app = PreviewApp::new(source.clone(), crate::settings::Settings::default(), &ctx);
+        let (loaded, result) = app.receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(loaded, source);
+        app.accept_result(loaded, result, &ctx);
+        assert!(!app.loading);
+        assert!(app.error.is_none());
+        assert!(app.texture.is_none());
+        let output = ctx.run(Default::default(), |ctx| app.show_content(ctx));
+        let labels: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape {
+                    Some(text.galley.text())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(labels, vec![name]);
+
+        let next = Source::Name("Another source".into());
+        let output = ctx.run(Default::default(), |ctx| app.load_path(next.clone(), ctx));
+        assert!(output.viewport_output[&egui::ViewportId::ROOT].commands.iter().any(
+            |command| matches!(command, egui::ViewportCommand::Title(title) if title == "Hop - Another source")
+        ));
+        app.accept_result(source.clone(), source.load(), &ctx);
+        assert!(app.loading);
+        let (loaded, result) = app.receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        app.accept_result(loaded, result, &ctx);
+        assert!(
+            matches!(&app.preview.as_ref().unwrap().content, Content::Name(name) if name == "Another source")
+        );
+
+        let folder = tempfile::tempdir().unwrap();
+        app.load_path(folder.path().to_owned(), &ctx);
+        app.accept_result(next.clone(), next.load(), &ctx);
+        assert!(app.loading);
+        let (loaded, result) = app.receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        app.accept_result(loaded, result, &ctx);
+        assert!(matches!(
+            &app.preview.as_ref().unwrap().content,
+            Content::Directory { .. }
+        ));
+        assert!(app.error.is_none());
+
+        app.load_path(source.clone(), &ctx);
+        app.accept_result(
+            folder.path().to_owned(),
+            Err("stale file error".into()),
+            &ctx,
+        );
+        let (loaded, result) = app.receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        app.accept_result(loaded, result, &ctx);
+        assert!(
+            matches!(&app.preview.as_ref().unwrap().content, Content::Name(loaded) if loaded == name)
+        );
+        assert!(app.error.is_none());
+    }
+
+    #[test]
     fn reloading_resets_old_state_and_updates_window_title() {
         let ctx = egui::Context::default();
         let (mut app, pending) = app_with_requests("old.txt");
@@ -2325,7 +2607,10 @@ mod tests {
         let output = ctx.run(Default::default(), |ctx| {
             app.load_path(PathBuf::from("new.txt"), ctx);
         });
-        assert_eq!(pending.try_recv().unwrap(), PathBuf::from("new.txt"));
+        assert_eq!(
+            pending.try_recv().unwrap(),
+            Source::Path(PathBuf::from("new.txt"))
+        );
         assert!(app.loading);
         assert!(app.preview.is_none());
         assert!(app.error.is_none());
@@ -2405,7 +2690,7 @@ mod tests {
             assert_eq!(info.delay, Duration::ZERO);
             assert_eq!(info.viewport_id, egui::ViewportId::ROOT);
             let (loaded_path, result) = app.receiver.try_recv().unwrap();
-            assert_eq!(loaded_path, path);
+            assert_eq!(loaded_path, Source::Path(path.clone()));
             app.accept_result(loaded_path, result, &ctx);
             let output = ctx.run(Default::default(), |_| {});
             assert!(!app.loading);
@@ -2446,11 +2731,11 @@ mod tests {
             &ctx,
         );
         let (path, result) = app.receiver.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert_eq!(path, executable);
+        assert_eq!(path, Source::Path(executable));
         assert!(result.is_ok());
         app.load_path(folder.clone(), &ctx);
         let (path, result) = app.receiver.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert_eq!(path, folder);
+        assert_eq!(path, Source::Path(folder));
         app.accept_result(path, result, &ctx);
         assert!(matches!(
             app.preview.unwrap().content,

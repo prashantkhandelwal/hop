@@ -75,33 +75,138 @@ impl Settings {
 
     fn save_to(&self, path: &Path) -> Result<(), String> {
         self.validate()?;
-        let parent = path
-            .parent()
-            .ok_or("Settings path has no parent directory.")?;
-        std::fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "Cannot create settings directory {}: {error}",
-                parent.display()
-            )
-        })?;
-        let bytes = serde_json::to_vec_pretty(self)
-            .map_err(|error| format!("Cannot encode settings: {error}"))?;
-        let mut temporary = tempfile::NamedTempFile::new_in(parent)
-            .map_err(|error| format!("Cannot create temporary settings file: {error}"))?;
-        temporary
-            .write_all(&bytes)
-            .and_then(|()| temporary.as_file().sync_all())
-            .map_err(|error| format!("Cannot write settings: {error}"))?;
-        temporary
-            .persist(path)
-            .map_err(|error| format!("Cannot save settings {}: {error}", path.display()))?;
+        save_json(self, path)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreviewPosition {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl PreviewPosition {
+    fn path() -> Result<PathBuf, String> {
+        Ok(Settings::path()?.with_file_name("preview-position.json"))
+    }
+
+    pub fn load() -> Result<Option<Self>, String> {
+        Self::load_from(&Self::path()?)
+    }
+
+    fn load_from(path: &Path) -> Result<Option<Self>, String> {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(format!(
+                    "Cannot read preview position {}: {error}",
+                    path.display()
+                ));
+            }
+        };
+        let position: Self = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("Invalid preview position {}: {error}", path.display()))?;
+        position.validate()?;
+        Ok(Some(position))
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if !self.x.is_finite() || !self.y.is_finite() {
+            return Err("Preview window position must have finite coordinates.".into());
+        }
         Ok(())
     }
+
+    pub fn save(&self) -> Result<(), String> {
+        self.save_to(&Self::path()?)
+    }
+
+    fn save_to(&self, path: &Path) -> Result<(), String> {
+        self.validate()?;
+        save_json(self, path)
+    }
+}
+
+fn save_json(value: &impl Serialize, path: &Path) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or("Settings path has no parent directory.")?;
+    std::fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "Cannot create settings directory {}: {error}",
+            parent.display()
+        )
+    })?;
+    let bytes = serde_json::to_vec_pretty(value)
+        .map_err(|error| format!("Cannot encode settings: {error}"))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|error| format!("Cannot create temporary settings file: {error}"))?;
+    temporary
+        .write_all(&bytes)
+        .and_then(|()| temporary.as_file().sync_all())
+        .map_err(|error| format!("Cannot write settings: {error}"))?;
+    temporary
+        .persist(path)
+        .map_err(|error| format!("Cannot save settings {}: {error}", path.display()))?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_position_is_optional_and_survives_reopening_and_settings_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("preview-position.json");
+        assert_eq!(PreviewPosition::load_from(&path).unwrap(), None);
+        for position in [
+            PreviewPosition { x: 250.0, y: 120.0 },
+            PreviewPosition {
+                x: -1400.5,
+                y: -80.0,
+            },
+        ] {
+            position.save_to(&path).unwrap();
+            Settings::default()
+                .save_to(&directory.path().join("settings.json"))
+                .unwrap();
+            assert_eq!(PreviewPosition::load_from(&path).unwrap(), Some(position));
+        }
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn invalid_preview_positions_are_reported_and_do_not_overwrite_saved_position() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("preview-position.json");
+        let position = PreviewPosition { x: 300.0, y: 200.0 };
+        position.save_to(&path).unwrap();
+        for invalid in [
+            PreviewPosition {
+                x: f32::NAN,
+                y: 0.0,
+            },
+            PreviewPosition {
+                x: 0.0,
+                y: f32::INFINITY,
+            },
+        ] {
+            assert!(invalid.save_to(&path).is_err());
+            assert_eq!(PreviewPosition::load_from(&path).unwrap(), Some(position));
+        }
+        for bytes in [
+            r#"{"x":1}"#,
+            r#"{"x":null,"y":0}"#,
+            r#"{"x":1e100,"y":0}"#,
+            "{",
+        ] {
+            std::fs::write(&path, bytes).unwrap();
+            assert!(PreviewPosition::load_from(&path).is_err());
+        }
+    }
 
     #[test]
     fn missing_settings_use_existing_player_defaults() {

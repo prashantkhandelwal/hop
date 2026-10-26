@@ -92,6 +92,12 @@ hop -- filename-starting-with-dash
 
 Close with **Space**, **Escape**, or the window close button.
 
+Preview windows remember their last normal window position when closed, including
+across app restarts and different files. The position is saved separately from playback
+settings in `preview-position.json` in the same configuration directory. This applies
+to both watcher and standalone previews. Wayland does not support reading or restoring
+window positions.
+
 ### Differences from Watcher Mode
 
 - Standalone previews **take focus** when opened (unlike watcher mode)

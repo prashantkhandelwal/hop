@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 pub fn show(source: impl Into<Source>) -> Result<(), String> {
     let source = source.into();
     let settings = crate::settings::Settings::load()?;
+    let position = crate::settings::PreviewPosition::load()?;
     #[cfg(windows)]
     let navigator = crate::windows::ExplorerNavigator::from_environment()?;
     #[cfg(windows)]
@@ -15,7 +16,7 @@ pub fn show(source: impl Into<Source>) -> Result<(), String> {
     let activate = true;
     let title = format!("Hop - {}", source.title());
     let options = eframe::NativeOptions {
-        viewport: preview_viewport(activate).with_icon(crate::app_icon::load()?),
+        viewport: preview_viewport(activate, position).with_icon(crate::app_icon::load()?),
         ..Default::default()
     };
     eframe::run_native(
@@ -24,7 +25,8 @@ pub fn show(source: impl Into<Source>) -> Result<(), String> {
         Box::new(move |cc| {
             #[cfg(windows)]
             let outside_clicks = Some(crate::windows::OutsideClickMonitor::new(cc)?);
-            let app = PreviewApp::new(source, settings, &cc.egui_ctx);
+            let mut app = PreviewApp::new(source, settings, &cc.egui_ctx);
+            app.position = position;
             #[cfg(windows)]
             let app = PreviewApp {
                 navigator,
@@ -37,12 +39,40 @@ pub fn show(source: impl Into<Source>) -> Result<(), String> {
     .map_err(|error| format!("Cannot open preview window: {error}"))
 }
 
-fn preview_viewport(activate: bool) -> egui::ViewportBuilder {
-    egui::ViewportBuilder::default()
+fn preview_viewport(
+    activate: bool,
+    position: Option<crate::settings::PreviewPosition>,
+) -> egui::ViewportBuilder {
+    let viewport = egui::ViewportBuilder::default()
         .with_inner_size([900.0, 640.0])
         .with_min_inner_size([400.0, 280.0])
         .with_window_level(egui::WindowLevel::AlwaysOnTop)
-        .with_active(activate)
+        .with_active(activate);
+    match position {
+        Some(position) => viewport.with_position([position.x, position.y]),
+        None => viewport,
+    }
+}
+
+fn remember_preview_position(
+    position: &mut Option<crate::settings::PreviewPosition>,
+    viewport: &egui::ViewportInfo,
+) {
+    if viewport.minimized == Some(true)
+        || viewport.maximized == Some(true)
+        || viewport.fullscreen == Some(true)
+    {
+        return;
+    }
+    if let Some(rect) = viewport.outer_rect
+        && rect.min.x.is_finite()
+        && rect.min.y.is_finite()
+    {
+        *position = Some(crate::settings::PreviewPosition {
+            x: rect.min.x,
+            y: rect.min.y,
+        });
+    }
 }
 
 pub fn show_settings() -> Result<(), String> {
@@ -246,6 +276,7 @@ fn show_about_panel(ctx: &egui::Context, texture: &egui::TextureHandle) {
 
 struct PreviewApp {
     settings: crate::settings::Settings,
+    position: Option<crate::settings::PreviewPosition>,
     path: PathBuf,
     source: Source,
     requests: Sender<Source>,
@@ -362,6 +393,7 @@ impl PreviewApp {
         });
         let mut app = Self {
             settings,
+            position: None,
             path: PathBuf::new(),
             source: source.clone(),
             requests,
@@ -841,7 +873,18 @@ fn animation_at(frames: &[preview::AnimationFrame], elapsed: Duration) -> (usize
 }
 
 impl eframe::App for PreviewApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if let Some(position) = self.position
+            && let Err(error) = position.save()
+        {
+            eprintln!("Hop: {error}");
+            #[cfg(windows)]
+            crate::tray::show_error(&error);
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        ctx.input(|input| remember_preview_position(&mut self.position, input.viewport()));
         #[cfg(windows)]
         if let Some(monitor) = &self.outside_clicks {
             ctx.request_repaint_after(Duration::from_millis(16));
@@ -1917,10 +1960,68 @@ mod tests {
     #[test]
     fn previews_stay_on_top_and_only_standalone_previews_activate() {
         for activate in [false, true] {
-            let viewport = preview_viewport(activate);
+            let viewport = preview_viewport(activate, None);
             assert_eq!(viewport.active, Some(activate));
             assert_eq!(viewport.window_level, Some(egui::WindowLevel::AlwaysOnTop));
         }
+    }
+
+    #[test]
+    fn preview_restores_the_saved_outer_position_without_changing_size_or_focus() {
+        let position = crate::settings::PreviewPosition {
+            x: -1250.0,
+            y: 85.0,
+        };
+        for activate in [false, true] {
+            let viewport = preview_viewport(activate, Some(position));
+            assert_eq!(viewport.position, Some(egui::pos2(-1250.0, 85.0)));
+            assert_eq!(viewport.inner_size, Some(egui::vec2(900.0, 640.0)));
+            assert_eq!(viewport.active, Some(activate));
+        }
+        assert_eq!(preview_viewport(true, None).position, None);
+    }
+
+    #[test]
+    fn preview_remembers_only_valid_normal_window_positions() {
+        let mut position = None;
+        let mut viewport = egui::ViewportInfo {
+            outer_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(-100.0, 250.0),
+                egui::vec2(900.0, 640.0),
+            )),
+            ..Default::default()
+        };
+        remember_preview_position(&mut position, &viewport);
+        let expected = Some(crate::settings::PreviewPosition {
+            x: -100.0,
+            y: 250.0,
+        });
+        assert_eq!(position, expected);
+        viewport.outer_rect = Some(egui::Rect::from_min_size(
+            egui::pos2(-32000.0, -32000.0),
+            egui::vec2(900.0, 640.0),
+        ));
+        for (minimized, maximized, fullscreen) in [
+            (Some(true), None, None),
+            (None, Some(true), None),
+            (None, None, Some(true)),
+        ] {
+            viewport.minimized = minimized;
+            viewport.maximized = maximized;
+            viewport.fullscreen = fullscreen;
+            remember_preview_position(&mut position, &viewport);
+            assert_eq!(position, expected);
+        }
+        viewport.fullscreen = None;
+        viewport.outer_rect = None;
+        remember_preview_position(&mut position, &viewport);
+        assert_eq!(position, expected);
+        viewport.outer_rect = Some(egui::Rect::from_min_size(
+            egui::pos2(f32::NAN, 0.0),
+            egui::vec2(900.0, 640.0),
+        ));
+        remember_preview_position(&mut position, &viewport);
+        assert_eq!(position, expected);
     }
 
     fn key_event(key: egui::Key, pressed: bool, repeat: bool) -> egui::Event {
@@ -1958,6 +2059,7 @@ mod tests {
         (
             PreviewApp {
                 settings: crate::settings::Settings::default(),
+                position: None,
                 path: PathBuf::from(path),
                 source: Source::Path(PathBuf::from(path)),
                 requests,

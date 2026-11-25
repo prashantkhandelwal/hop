@@ -1,3 +1,4 @@
+use crate::settings::{FileType, Settings};
 use image::{AnimationDecoder, ImageDecoder};
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
@@ -45,10 +46,15 @@ impl Source {
         }
     }
 
+    #[cfg(test)]
     pub fn load(&self) -> Result<Preview, String> {
+        self.load_with_settings(&Settings::default())
+    }
+
+    pub fn load_with_settings(&self, settings: &Settings) -> Result<Preview, String> {
         match self {
-            Self::Path(path) => load(path),
-            Self::Explorer { path, name } => load_path(path, Some(name)),
+            Self::Path(path) => load_path(path, None, settings),
+            Self::Explorer { path, name } => load_path(path, Some(name), settings),
             Self::Name(name) => Ok(Preview {
                 content: Content::Name(name.clone()),
             }),
@@ -59,6 +65,7 @@ impl Source {
 pub enum Content {
     Name(String),
     Pdf(Box<crate::pdf::PdfPreview>),
+    Model(Box<crate::model::ModelPreview>),
     Animation(Vec<AnimationFrame>),
     Video,
     Image {
@@ -80,11 +87,16 @@ pub enum Content {
     },
 }
 
+#[cfg(test)]
 pub fn load(path: &Path) -> Result<Preview, String> {
-    load_path(path, None)
+    load_path(path, None, &Settings::default())
 }
 
-fn load_path(path: &Path, missing_name: Option<&str>) -> Result<Preview, String> {
+fn load_path(
+    path: &Path,
+    missing_name: Option<&str>,
+    settings: &Settings,
+) -> Result<Preview, String> {
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(error) => {
@@ -101,28 +113,27 @@ fn load_path(path: &Path, missing_name: Option<&str>) -> Result<Preview, String>
             ));
         }
     };
-    let content = if metadata.is_dir() {
+    let file_type = FileType::for_path(path, metadata.is_dir());
+    let content = if settings.disabled_file_types.contains(&file_type) {
+        unsupported(path, metadata.len())
+    } else if metadata.is_dir() {
         load_directory(path)?
     } else if !metadata.is_file() {
         unsupported(path, metadata.len())
-    } else if path
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
-    {
+    } else if file_type == FileType::Pdf {
         Content::Pdf(Box::new(crate::pdf::PdfPreview::load(path)?))
-    } else if is_video(path) {
+    } else if file_type.is_video() {
         Content::Video
-    } else if is_image(path) {
+    } else if matches!(file_type, FileType::Stl | FileType::ThreeMf) {
+        Content::Model(Box::new(crate::model::ModelPreview::load(path)?))
+    } else if file_type.is_image() {
         if metadata.len() > IMAGE_FILE_LIMIT {
             eprintln!(
                 "Hop: {}: image exceeds the 64 MiB preview limit.",
                 path.display()
             );
             unsupported(path, metadata.len())
-        } else if path
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("gif"))
-        {
+        } else if file_type == FileType::Gif {
             load_gif(path)?
         } else {
             load_image(path)?
@@ -194,31 +205,6 @@ fn is_document_or_binary(path: &Path) -> bool {
         })
 }
 
-fn is_video(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "mp4"
-                    | "m4v"
-                    | "mkv"
-                    | "webm"
-                    | "mov"
-                    | "avi"
-                    | "wmv"
-                    | "mpg"
-                    | "mpeg"
-                    | "mts"
-                    | "m2ts"
-                    | "ts"
-                    | "ogv"
-                    | "flv"
-                    | "3gp"
-            )
-        })
-}
-
 fn image_limits() -> image::Limits {
     let mut limits = image::Limits::default();
     limits.max_alloc = Some(IMAGE_MEMORY_LIMIT);
@@ -283,32 +269,6 @@ fn collect_gif_frames(
         return Err("GIF contains no frames.".into());
     }
     Ok(Content::Animation(frames))
-}
-
-fn is_image(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "png"
-                    | "jpg"
-                    | "jpeg"
-                    | "gif"
-                    | "bmp"
-                    | "ico"
-                    | "tif"
-                    | "tiff"
-                    | "webp"
-                    | "pnm"
-                    | "pbm"
-                    | "pgm"
-                    | "ppm"
-                    | "pam"
-                    | "tga"
-                    | "qoi"
-            )
-        })
 }
 
 fn load_image(path: &Path) -> Result<Content, String> {
@@ -463,6 +423,82 @@ mod tests {
             error,
             format!("Cannot inspect file: {cause} (file: {})", missing.display())
         );
+    }
+
+    #[test]
+    fn unchecked_formats_and_aliases_show_metadata_without_decoding() {
+        let dir = TestDirectory::new();
+        for &(file_type, _, extensions) in FileType::FORMATS {
+            let mut settings = Settings::default();
+            settings.disabled_file_types.insert(file_type);
+            for extension in extensions {
+                let path = dir
+                    .0
+                    .join(format!("disabled.{}", extension.to_ascii_uppercase()));
+                fs::write(&path, b"invalid content").unwrap();
+                let preview = Source::Path(path.clone())
+                    .load_with_settings(&settings)
+                    .unwrap();
+                assert!(
+                    matches!(preview.content,
+                    Content::Unsupported { bytes: 15, extension: actual, .. }
+                    if actual == extension.to_ascii_uppercase()),
+                    "{extension}"
+                );
+                settings.disabled_file_types.remove(&file_type);
+                let enabled = Source::Path(path.clone()).load_with_settings(&settings);
+                if file_type.is_video() {
+                    assert!(matches!(enabled.unwrap().content, Content::Video));
+                } else {
+                    assert!(enabled.is_err(), "{extension} should attempt decoding");
+                }
+                settings.disabled_file_types.insert(file_type);
+            }
+        }
+    }
+
+    #[test]
+    fn unchecked_text_and_folders_show_metadata_but_missing_files_still_error() {
+        let dir = TestDirectory::new();
+        let mut settings = Settings::default();
+        settings
+            .disabled_file_types
+            .extend([FileType::Text, FileType::Folder]);
+        for name in ["source.rs", "no-extension"] {
+            let path = dir.0.join(name);
+            fs::write(&path, "hello").unwrap();
+            let source = Source::Path(path);
+            assert!(matches!(
+                source.load_with_settings(&settings).unwrap().content,
+                Content::Unsupported { bytes: 5, .. }
+            ));
+            assert!(matches!(
+                source.load().unwrap().content,
+                Content::Text { .. }
+            ));
+        }
+        let source = Source::Path(dir.0.clone());
+        assert!(matches!(
+            source.load_with_settings(&settings).unwrap().content,
+            Content::Unsupported { .. }
+        ));
+        assert!(matches!(
+            source.load().unwrap().content,
+            Content::Directory { .. }
+        ));
+        assert!(
+            Source::Path(dir.0.join("missing.png"))
+                .load_with_settings(&settings)
+                .is_err()
+        );
+        let missing = Source::Explorer {
+            path: dir.0.join("missing.png"),
+            name: "Missing item".into(),
+        };
+        assert!(matches!(
+            missing.load_with_settings(&settings).unwrap().content,
+            Content::Name(_)
+        ));
     }
 
     #[test]

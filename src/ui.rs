@@ -93,7 +93,7 @@ pub fn show_settings() -> Result<(), String> {
             centered: true,
             viewport: egui::ViewportBuilder::default()
                 .with_icon(crate::app_icon::load()?)
-                .with_inner_size([480.0, 300.0])
+                .with_inner_size([520.0, 640.0])
                 .with_minimize_button(false)
                 .with_maximize_button(false)
                 .with_resizable(false),
@@ -113,7 +113,7 @@ pub fn show_settings() -> Result<(), String> {
                         *startup.as_ref().map_err(|error| error.clone())?,
                     )
                     .map_err(|error| format!(
-                        "Playback settings were saved, but startup could not be updated: {error}"
+                        "Settings were saved, but startup could not be updated: {error}"
                     ))?;
                     Ok::<(), String>(())
                 })();
@@ -159,8 +159,10 @@ pub fn show_settings() -> Result<(), String> {
                             ui.add_space(12.0);
                             show_startup_setting(ui, &mut startup);
                         }
-                        ui.add_space(84.0);
-                        ui.label("Playback changes apply when you reopen the preview.");
+                        ui.add_space(12.0);
+                        show_file_type_settings(ui, settings);
+                        ui.add_space(12.0);
+                        ui.label("Changes apply when you reopen the preview.");
                         if let Some(error) = &save_error {
                             ui.colored_label(ui.visuals().error_fg_color, error);
                         }
@@ -173,6 +175,39 @@ pub fn show_settings() -> Result<(), String> {
         },
     )
     .map_err(|error| format!("Cannot open settings: {error}"))
+}
+
+fn show_file_type_settings(ui: &mut egui::Ui, settings: &mut crate::settings::Settings) {
+    ui.heading("Supported file types");
+    ui.label("Unchecked types show only the file icon, name, and size.");
+    let column_width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
+    egui::Grid::new("supported-file-types")
+        .num_columns(2)
+        .min_col_width(column_width)
+        .max_col_width(column_width)
+        .spacing(ui.spacing().item_spacing)
+        .show(ui, |ui| {
+            for (index, &(file_type, name, extensions)) in
+                crate::settings::FileType::FORMATS.iter().enumerate()
+            {
+                let label = if extensions.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{name} (.{})", extensions.join(", ."))
+                };
+                let mut enabled = !settings.disabled_file_types.contains(&file_type);
+                if ui.checkbox(&mut enabled, label).changed() {
+                    if enabled {
+                        settings.disabled_file_types.remove(&file_type);
+                    } else {
+                        settings.disabled_file_types.insert(file_type);
+                    }
+                }
+                if index % 2 == 1 {
+                    ui.end_row();
+                }
+            }
+        });
 }
 
 fn show_settings_actions(ctx: &egui::Context, can_save: bool) -> [egui::Response; 3] {
@@ -380,11 +415,12 @@ impl PreviewApp {
         let (sender, receiver) = mpsc::sync_channel(1);
         let (requests, pending) = mpsc::channel::<Source>();
         let ctx = ctx.clone();
+        let worker_settings = settings.clone();
         std::thread::spawn(move || {
             while let Ok(next) = pending.recv() {
                 // Serialize decoding and skip intermediate requests during rapid navigation.
                 let path = pending.try_iter().last().unwrap_or(next);
-                let result = path.load();
+                let result = path.load_with_settings(&worker_settings);
                 if sender.send((path, result)).is_err() {
                     break;
                 }
@@ -943,6 +979,7 @@ impl PreviewApp {
                         });
                     }
                     Content::Pdf(pdf) => pdf.show(ui),
+                    Content::Model(model) => model.show(ui),
                     Content::Image { .. } | Content::Animation(_) | Content::Video => {
                         if let Some(texture) = &self.texture {
                             let pane = ui.available_rect_before_wrap();
@@ -1176,6 +1213,136 @@ fn file_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_type_checkboxes_use_two_columns_and_bounded_height() {
+        let ctx = egui::Context::default();
+        let mut settings = crate::settings::Settings::default();
+        let pane = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(520.0, 640.0));
+        for _ in 0..2 {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(pane),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| show_file_type_settings(ui, &mut settings));
+                },
+            );
+            let label_rect = |label| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => {
+                            Some(shape.shape.visual_bounding_rect())
+                        }
+                        _ => None,
+                    })
+                    .expect("Expected visible checkbox label")
+            };
+            let png = label_rect("PNG (.png)");
+            let jpeg = label_rect("JPEG (.jpg, .jpeg)");
+            let folders = label_rect("Folders");
+            assert!((png.center().y - jpeg.center().y).abs() < 1.0);
+            assert!(jpeg.left() > png.right());
+            assert!(folders.bottom() - png.top() <= 340.0);
+            assert!(pane.contains_rect(label_rect("Text/source (any UTF-8 text file)")));
+            assert!(pane.contains_rect(folders));
+        }
+    }
+
+    #[test]
+    fn file_type_checkboxes_toggle_independently() {
+        fn frame(
+            ctx: &egui::Context,
+            settings: &mut crate::settings::Settings,
+            events: Vec<egui::Event>,
+        ) -> egui::FullOutput {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(520.0, 1200.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| show_file_type_settings(ui, settings));
+                },
+            )
+        }
+        let ctx = egui::Context::default();
+        let mut settings = crate::settings::Settings::default();
+        let output = frame(&ctx, &mut settings, Vec::new());
+        let position = output
+            .shapes
+            .iter()
+            .find_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && text.galley.text() == "STL (.stl)"
+                {
+                    Some(shape.shape.visual_bounding_rect().center())
+                } else {
+                    None
+                }
+            })
+            .expect("STL checkbox should be visible");
+        for disabled in [true, false] {
+            for pressed in [true, false] {
+                frame(
+                    &ctx,
+                    &mut settings,
+                    vec![
+                        egui::Event::PointerMoved(position),
+                        egui::Event::PointerButton {
+                            pos: position,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert_eq!(
+                settings.disabled_file_types.contains(&crate::settings::FileType::Stl),
+                disabled
+            );
+            assert!(!settings.disabled_file_types.contains(&crate::settings::FileType::Png));
+        }
+    }
+
+    #[test]
+    fn preview_worker_applies_disabled_formats_during_initial_load_and_navigation() {
+        let directory = tempfile::tempdir().unwrap();
+        let image_path = directory.path().join("disabled.png");
+        let video_path = directory.path().join("disabled.mp4");
+        std::fs::write(&image_path, b"broken image").unwrap();
+        std::fs::write(&video_path, b"not a video").unwrap();
+        let mut settings = crate::settings::Settings::default();
+        settings
+            .disabled_file_types
+            .extend([crate::settings::FileType::Png, crate::settings::FileType::Mp4]);
+        let ctx = egui::Context::default();
+        let mut app = PreviewApp::new(image_path, settings, &ctx);
+        for navigate in [false, true] {
+            if navigate {
+                app.load_path(video_path.clone(), &ctx);
+            }
+            let (source, result) = app.receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+            app.accept_result(source, result, &ctx);
+            assert!(matches!(
+                app.preview.as_ref().unwrap().content,
+                Content::Unsupported { .. }
+            ));
+            assert!(app.error.is_none());
+            assert!(app.video.is_none());
+            assert!(app.animation_started.is_none());
+        }
+    }
 
     #[test]
     fn settings_actions_are_large_bottom_aligned_and_keep_save_gated() {

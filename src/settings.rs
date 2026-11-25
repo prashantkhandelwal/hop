@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -7,6 +8,7 @@ use std::path::{Path, PathBuf};
 pub struct Settings {
     pub default_volume: f64,
     pub controls_hide_delay: f64,
+    pub disabled_file_types: BTreeSet<FileType>,
 }
 
 impl Default for Settings {
@@ -14,7 +16,129 @@ impl Default for Settings {
         Self {
             default_volume: 70.0,
             controls_hide_delay: 2.0,
+            disabled_file_types: BTreeSet::new(),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileType {
+    Png,
+    Jpeg,
+    Bmp,
+    Ico,
+    Tiff,
+    Webp,
+    Pnm,
+    Tga,
+    Qoi,
+    Gif,
+    Pdf,
+    Stl,
+    ThreeMf,
+    Mp4,
+    Mkv,
+    Webm,
+    Mov,
+    Avi,
+    Wmv,
+    Mpeg,
+    M4v,
+    Ts,
+    Mts,
+    M2ts,
+    Ogv,
+    Flv,
+    ThreeGp,
+    Text,
+    Folder,
+}
+
+impl FileType {
+    pub const FORMATS: &[(Self, &str, &[&str])] = &[
+        (Self::Png, "PNG", &["png"]),
+        (Self::Jpeg, "JPEG", &["jpg", "jpeg"]),
+        (Self::Bmp, "BMP", &["bmp"]),
+        (Self::Ico, "ICO", &["ico"]),
+        (Self::Tiff, "TIFF", &["tif", "tiff"]),
+        (Self::Webp, "WebP", &["webp"]),
+        (Self::Pnm, "PNM", &["pnm", "pbm", "pgm", "ppm", "pam"]),
+        (Self::Tga, "TGA", &["tga"]),
+        (Self::Qoi, "QOI", &["qoi"]),
+        (Self::Gif, "Animated GIF", &["gif"]),
+        (Self::Pdf, "PDF", &["pdf"]),
+        (Self::Stl, "STL", &["stl"]),
+        (Self::ThreeMf, "3MF", &["3mf"]),
+        (Self::Mp4, "MP4", &["mp4"]),
+        (Self::Mkv, "MKV", &["mkv"]),
+        (Self::Webm, "WebM", &["webm"]),
+        (Self::Mov, "MOV", &["mov"]),
+        (Self::Avi, "AVI", &["avi"]),
+        (Self::Wmv, "WMV", &["wmv"]),
+        (Self::Mpeg, "MPEG", &["mpg", "mpeg"]),
+        (Self::M4v, "M4V", &["m4v"]),
+        (Self::Ts, "TS", &["ts"]),
+        (Self::Mts, "MTS", &["mts"]),
+        (Self::M2ts, "M2TS", &["m2ts"]),
+        (Self::Ogv, "OGV", &["ogv"]),
+        (Self::Flv, "FLV", &["flv"]),
+        (Self::ThreeGp, "3GP", &["3gp"]),
+        (Self::Text, "Text/source (any UTF-8 text file)", &[]),
+        (Self::Folder, "Folders", &[]),
+    ];
+
+    pub fn for_path(path: &Path, is_directory: bool) -> Self {
+        if is_directory {
+            return Self::Folder;
+        }
+        let extension = path.extension().and_then(|extension| extension.to_str());
+        Self::FORMATS
+            .iter()
+            .find(|(_, _, extensions)| {
+                extension.is_some_and(|extension| {
+                    extensions
+                        .iter()
+                        .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+                })
+            })
+            .map_or(Self::Text, |(file_type, _, _)| *file_type)
+    }
+
+    pub fn is_image(self) -> bool {
+        matches!(
+            self,
+            Self::Png
+                | Self::Jpeg
+                | Self::Bmp
+                | Self::Ico
+                | Self::Tiff
+                | Self::Webp
+                | Self::Pnm
+                | Self::Tga
+                | Self::Qoi
+                | Self::Gif
+        )
+    }
+
+    pub fn is_video(self) -> bool {
+        matches!(
+            self,
+            Self::Mp4
+                | Self::Mkv
+                | Self::Webm
+                | Self::Mov
+                | Self::Avi
+                | Self::Wmv
+                | Self::Mpeg
+                | Self::M4v
+                | Self::Ts
+                | Self::Mts
+                | Self::M2ts
+                | Self::Ogv
+                | Self::Flv
+                | Self::ThreeGp
+        )
     }
 }
 
@@ -217,12 +341,42 @@ mod tests {
     }
 
     #[test]
+    fn file_type_preferences_persist_and_old_settings_enable_all_formats() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        std::fs::write(&path, r#"{"default_volume":25,"controls_hide_delay":5}"#).unwrap();
+        let mut settings = Settings::load_from(&path).unwrap();
+        assert!(settings.disabled_file_types.is_empty());
+        settings
+            .disabled_file_types
+            .extend([FileType::Jpeg, FileType::ThreeMf, FileType::Text]);
+        settings.save_to(&path).unwrap();
+        assert_eq!(Settings::load_from(&path).unwrap(), settings);
+        Settings::default().save_to(&path).unwrap();
+        assert!(
+            Settings::load_from(&path)
+                .unwrap()
+                .disabled_file_types
+                .is_empty()
+        );
+        for bytes in [
+            r#"{"disabled_file_types":["unknown"]}"#,
+            r#"{"disabled_file_types":[false]}"#,
+            r#"{"disabled_file_types":null}"#,
+        ] {
+            std::fs::write(&path, bytes).unwrap();
+            assert!(Settings::load_from(&path).is_err());
+        }
+    }
+
+    #[test]
     fn saves_and_replaces_settings_without_leaving_temporary_files() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("hop").join("settings.json");
         let mut settings = Settings {
             default_volume: 25.0,
             controls_hide_delay: 5.0,
+            ..Settings::default()
         };
         settings.save_to(&path).unwrap();
         assert_eq!(Settings::load_from(&path).unwrap(), settings);

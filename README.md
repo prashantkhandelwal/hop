@@ -2,7 +2,7 @@
 
 <img src="assets/hop.svg" alt="Hop preview window and spacebar logo" width="96" height="96">
 
-Quick file previews for Windows and Linux. Preview images, PDFs, UTF-8 text/source files, folders, and file metadata without opening files in their default applications.
+Quick file previews for Windows and Linux. Preview images, PDFs, 3D models, UTF-8 text/source files, folders, and file metadata without opening files in their default applications.
 
 ---
 
@@ -32,6 +32,7 @@ Hop is CLI-based on Linux. Integrate with your file manager by creating a custom
 | **Images** | PNG, JPEG, BMP, ICO, TIFF/TIF, WebP, PNM, TGA, QOI |
 | **Animated GIF** | Full animation with frame timing and looping |
 | **PDF** | Full document navigation, zoom, fit-to-page, and scrolling |
+| **3D Models** | STL (ASCII/binary) and 3MF core meshes, with scroll-wheel zoom and left-drag rotation |
 | **Video** | MP4, MKV, WebM, MOV, AVI, WMV, MPEG, M4V, TS, OGV, FLV, 3GP (with audio) |
 | **Text/Source** | Any UTF-8 text file, up to 256 KiB |
 | **Folders** | Directory listing with icon and contents |
@@ -53,7 +54,7 @@ Hop is CLI-based on Linux. Integrate with your file manager by creating a custom
 
 Right-click the tray icon:
 
-- **Settings:** Adjust video volume (0–100%), controls auto-hide delay (0.5–30 seconds), and optionally enable startup at sign-in
+- **Settings:** Choose which file formats to preview, adjust video volume (0–100%) and controls auto-hide delay (0.5–30 seconds), and optionally enable startup at sign-in
 - **About:** View the app icon, version, and tagline: "A quick peek. A smoother workflow."
 - **Exit:** Close the watcher and all open preview windows
 
@@ -76,7 +77,15 @@ Settings are stored as JSON:
 - **Windows:** `%APPDATA%\hop\settings.json`
 - **Linux:** `$XDG_CONFIG_HOME/hop/settings.json` or `~/.config/hop/settings.json`
 
-Default settings: 70% volume, 2-second auto-hide delay, startup disabled.
+Default settings: all supported file types enabled, 70% volume, 2-second auto-hide delay, startup disabled.
+
+The Settings window lists each supported format in a two-column checkbox layout (aliases such as
+JPG/JPEG share a checkbox), plus separate controls for text/source files and folders.
+Uncheck a type to show only its icon, name, and size instead of decoding or playing it.
+Other unsupported files always show metadata. Click **Save** to persist your choices;
+they apply to new preview windows in both watcher and standalone modes, including
+navigation within those windows. **Restore defaults** enables all types again.
+Existing settings files without file-type preferences keep all types enabled.
 
 ---
 
@@ -156,6 +165,19 @@ sudo pacman -S mpv             # Arch Linux
 - **Fit-to-page mode:** Scroll wheel navigates pages
 - **Zoomed mode:** Scroll at edge advances pages; scroll in center scrolls content
 - **Limitations:** No forms, text selection, embedded scripts, document links, or password entry
+
+### 3D Model Handling
+
+- **Controls:** Scroll up/down to zoom in/out; hold the left mouse button and drag to rotate
+- **Initial view:** Centered and scaled to fit, with shaded surfaces and depth-tested visibility
+- **Zoom:** 10–1,000% of the initial fit
+- **Disk limit:** 64 MiB
+- **Geometry limits:** 200,000 triangles (including expanded 3MF instances), 600,000 3MF vertices
+- **3MF:** Reads the package's root model relationship, build items, and nested component transforms
+- **3MF limits:** 32 MiB per XML part, 32 component levels, 200,000 component visits
+- **Rendering:** Background CPU renderer; image resolution capped at 800 pixels per axis
+- **Limitations:** Uniform shading; 3MF materials, textures, and colors are not displayed. Required extensions and external component/build files show an explicit unsupported-feature error
+- **Invalid files or exceeded limits:** Show an explicit error
 
 ### Text/Source Files
 
@@ -348,6 +370,7 @@ Get-FileHash .\mpv-runtime.7z -Algorithm SHA256
 - **GUI:** egui (immediate-mode UI) with eframe (window handling)
 - **Images:** `image` crate (PNG, JPEG, BMP, ICO, TIFF, WebP, PNM, TGA, QOI)
 - **GIF:** Native frame decoding and animation
+- **3D models:** `stl_io`, ZIP/XML parsing for 3MF, and depth-tested software rendering
 - **PDF:** Embedded Rust renderer (pdfium-render)
 - **Video:** libmpv (software rendering)
 - **Threading:** Dedicated workers for file loading, layout queries, and view synchronization

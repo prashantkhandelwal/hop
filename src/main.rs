@@ -3,6 +3,7 @@
 mod app_icon;
 mod file_icon;
 mod media;
+mod model;
 mod pdf;
 mod preview;
 mod settings;

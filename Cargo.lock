@@ -1126,6 +1126,7 @@ dependencies = [
  "hayro",
  "image",
  "libloading",
+ "quick-xml",
  "raw-window-handle",
  "roxmltree",
  "serde",

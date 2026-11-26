@@ -32,7 +32,7 @@ Hop is CLI-based on Linux. Integrate with your file manager by creating a custom
 | **Images** | PNG, JPEG, BMP, ICO, TIFF/TIF, WebP, PNM, TGA, QOI |
 | **Animated GIF** | Full animation with frame timing and looping |
 | **PDF** | Full document navigation, zoom, fit-to-page, and scrolling |
-| **3D Models** | STL (ASCII/binary) and 3MF core meshes, with scroll-wheel zoom and left-drag rotation |
+| **3D Models** | STL (ASCII/binary) and 3MF core/production meshes, with scroll-wheel zoom and left-drag rotation |
 | **Video** | MP4, MKV, WebM, MOV, AVI, WMV, MPEG, M4V, TS, OGV, FLV, 3GP (with audio) |
 | **Text/Source** | Any UTF-8 text file, up to 256 KiB |
 | **Folders** | Directory listing with icon and contents |
@@ -168,15 +168,15 @@ sudo pacman -S mpv             # Arch Linux
 
 ### 3D Model Handling
 
-- **Controls:** Scroll up/down to zoom in/out; hold the left mouse button and drag to rotate
+- **Controls:** Scroll up/down to zoom in/out; hold the left mouse button and drag to rotate; hold the middle (scroll wheel) button and drag to pan
 - **Initial view:** Centered and scaled to fit, with shaded surfaces and depth-tested visibility
 - **Zoom:** 10–1,000% of the initial fit
 - **Disk limit:** 64 MiB
-- **Geometry limits:** 200,000 triangles (including expanded 3MF instances), 600,000 3MF vertices
-- **3MF:** Reads the package's root model relationship, build items, and nested component transforms
-- **3MF limits:** 32 MiB per XML part, 32 component levels, 200,000 component visits
+- **Geometry limits:** 200,000 STL triangles; 2,000,000 3MF triangles (including expanded instances) and 1,000,000 3MF vertices
+- **3MF:** Reads the root model relationship, build items, nested component transforms, and production-extension model parts inside the package (including Bambu Studio assemblies)
+- **3MF limits:** Streaming model XML parsing; 256 MiB per XML part and total decompressed XML, 128 XML nesting levels, 128 model parts, 32 component levels, 200,000 component visits
 - **Rendering:** Background CPU renderer; image resolution capped at 800 pixels per axis
-- **Limitations:** Uniform shading; 3MF materials, textures, and colors are not displayed. Required extensions and external component/build files show an explicit unsupported-feature error
+- **Limitations:** Uniform shading; 3MF materials, textures, and colors are not displayed. Required extensions other than production, and model references outside the package, show an explicit error
 - **Invalid files or exceeded limits:** Show an explicit error
 
 ### Text/Source Files

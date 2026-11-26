@@ -17,6 +17,7 @@ serde_json = "1"
 tempfile = "3"
 glam = "0.30"
 roxmltree = "0.21"
+quick-xml = "0.41"
 stl_io = "0.8"
 zip = { version = "6", default-features = false, features = ["deflate"] }
 
